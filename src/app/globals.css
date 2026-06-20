@@ -1,0 +1,840 @@
+/* 全局基础样式：保证布局可用、常驻导航可见（需求 6.2、6.5、6.6） */
+
+/* 基础重置 */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: #1f2933;
+  background-color: #f5f7fa;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   常驻导航 NavBar（需求 6.1、6.2、6.3）
+   使用 sticky 定位，滚动时保持置顶可见、不被内容遮挡。
+   ============================================================ */
+.nav-bar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 24px;
+  height: 56px;
+  background-color: #0f2942;
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.nav-bar__brand {
+  font-weight: 600;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.nav-bar__list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-bar__item {
+  display: flex;
+}
+
+.nav-bar__link {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 6px;
+  color: #c7d2dc;
+  text-decoration: none;
+  font-size: 14px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.nav-bar__link:hover {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* 选中态视觉高亮：不仅依赖颜色，同时加粗 + 下边框（需求 6.3） */
+.nav-bar__link--active {
+  color: #ffffff;
+  font-weight: 600;
+  background-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 -2px 0 #4dabf7;
+}
+
+/* ============================================================
+   主内容区
+   ============================================================ */
+.app-content {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+/* ============================================================
+   共享加载态 LoadingState（需求 6.5）
+   ============================================================ */
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  color: #52606d;
+}
+
+.loading-state__spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #cbd2d9;
+  border-top-color: #4dabf7;
+  border-radius: 50%;
+  animation: loading-spin 0.8s linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ============================================================
+   共享错误态 ErrorState（需求 6.6）
+   ============================================================ */
+.error-state__banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  background-color: #fff0f0;
+  border: 1px solid #f5c2c2;
+  border-radius: 6px;
+  color: #a61b1b;
+}
+
+.error-state__retry {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  background-color: #a61b1b;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.error-state__retry:hover {
+  background-color: #851414;
+}
+
+/* ============================================================
+   账户信息页面与表单（需求 2.1、2.6、2.7）
+   ============================================================ */
+.account-page__title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.account-page__intro {
+  margin: 0 0 20px;
+  color: #52606d;
+  font-size: 14px;
+}
+
+.account-form {
+  max-width: 520px;
+}
+
+/* 单个表单字段：标签在上、输入在下 */
+.account-form__field {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.account-form__label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2933;
+}
+
+.account-form__input {
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #1f2933;
+  background-color: #ffffff;
+  border: 1px solid #cbd2d9;
+  border-radius: 6px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.account-form__input:focus {
+  outline: none;
+  border-color: #4dabf7;
+  box-shadow: 0 0 0 3px rgba(77, 171, 247, 0.2);
+}
+
+/* 校验出错的输入框：红色边框，不仅依赖颜色还配合下方文本提示 */
+.account-form__input--error {
+  border-color: #d64545;
+}
+
+.account-form__input--error:focus {
+  border-color: #d64545;
+  box-shadow: 0 0 0 3px rgba(214, 69, 69, 0.18);
+}
+
+/* 字段级错误文本 */
+.account-form__field-error {
+  margin: 0;
+  font-size: 13px;
+  color: #a61b1b;
+}
+
+.account-form__actions {
+  margin-top: 8px;
+}
+
+.account-form__submit {
+  padding: 9px 22px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #ffffff;
+  background-color: #1c7ed6;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.account-form__submit:hover:not(:disabled) {
+  background-color: #1864ab;
+}
+
+.account-form__submit:disabled {
+  background-color: #91a7c0;
+  cursor: not-allowed;
+}
+
+/* 成功提示与最新资料展示 */
+.account-form__success {
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background-color: #ebfbee;
+  border: 1px solid #b2f2bb;
+  border-radius: 6px;
+}
+
+.account-form__success-text {
+  margin: 0 0 10px;
+  font-weight: 600;
+  color: #2b8a3e;
+}
+
+.account-form__profile {
+  margin: 0;
+}
+
+.account-form__profile-row {
+  display: flex;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.account-form__profile-label {
+  flex: 0 0 64px;
+  margin: 0;
+  font-weight: 500;
+  color: #52606d;
+}
+
+.account-form__profile-value {
+  margin: 0;
+  color: #1f2933;
+  word-break: break-word;
+}
+
+/* ============================================================
+   设备监控功能区（需求 1.4、1.5、1.6、1.8）
+   ============================================================ */
+
+/* 页面头部：标题 + 刷新按钮 */
+.devices-page__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.devices-page__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+/* 列表与详情并排布局（窄屏自动换行） */
+.devices-page__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.devices-page__list {
+  flex: 1 1 320px;
+  min-width: 280px;
+}
+
+.devices-page__detail {
+  flex: 1 1 320px;
+  min-width: 280px;
+  padding: 16px;
+  background-color: #ffffff;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+}
+
+.devices-page__detail-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* 刷新按钮（需求 1.5） */
+.refresh-button {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  background-color: #1c7ed6;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.refresh-button:hover:not(:disabled) {
+  background-color: #1971c2;
+}
+
+.refresh-button:disabled {
+  background-color: #adb5bd;
+  cursor: not-allowed;
+}
+
+/* 设备列表（需求 1.6） */
+.device-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.device-list__entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  background-color: #ffffff;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.device-list__entry:hover {
+  border-color: #bfc8d2;
+}
+
+/* 选中态：不仅依赖颜色，附加边框加粗与阴影 */
+.device-list__entry--active {
+  border-color: #1c7ed6;
+  box-shadow: 0 0 0 1px #1c7ed6;
+}
+
+.device-list__name {
+  font-weight: 500;
+  color: #1f2933;
+}
+
+/* 空状态「暂无设备」（需求 1.6） */
+.device-list__empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: #7b8794;
+  background-color: #ffffff;
+  border: 1px dashed #cbd2d9;
+  border-radius: 8px;
+}
+
+/* 状态徽章：在线/离线以颜色 + 图标 + 文本三重区分（需求 1.4） */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.status-badge__icon {
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* 在线：绿色系 */
+.status-badge--online {
+  color: #0b7a3b;
+  background-color: #e6f7ed;
+  border: 1px solid #a3e3c1;
+}
+
+/* 离线：灰色系（颜色、图标、文本均不同于在线） */
+.status-badge--offline {
+  color: #5c6670;
+  background-color: #eef1f4;
+  border: 1px solid #cbd2d9;
+}
+
+/* 设备详情（需求 1.8） */
+.device-detail {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.device-detail__row {
+  display: flex;
+  gap: 12px;
+}
+
+.device-detail__term {
+  flex: 0 0 120px;
+  margin: 0;
+  color: #7b8794;
+  font-size: 13px;
+}
+
+.device-detail__desc {
+  margin: 0;
+  color: #1f2933;
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.device-detail__empty {
+  padding: 16px;
+  color: #7b8794;
+}
+
+/* ============================================================
+   充放电数据可视化（需求 3）
+   ============================================================ */
+
+/* 页头：标题与设备范围切换器分列两端 */
+.energy-page__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.energy-page__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2933;
+}
+
+/* 设备范围切换器 */
+.scope-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scope-toggle__label {
+  font-size: 13px;
+  color: #52606d;
+}
+
+.scope-toggle__select {
+  padding: 6px 10px;
+  font-size: 14px;
+  color: #1f2933;
+  background-color: #ffffff;
+  border: 1px solid #cbd2d9;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* 当日总量卡片：两列自适应网格 */
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  background-color: #ffffff;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* 充/放电卡片各自的左侧色条，作为颜色之外的辅助区分 */
+.summary-card--charge {
+  border-left: 4px solid #4dabf7;
+}
+
+.summary-card--discharge {
+  border-left: 4px solid #f59f00;
+}
+
+.summary-card__label {
+  font-size: 14px;
+  color: #52606d;
+}
+
+.summary-card__value {
+  font-size: 28px;
+  font-weight: 700;
+  color: #1f2933;
+}
+
+.summary-card__unit {
+  font-size: 14px;
+  font-weight: 500;
+  color: #7b8794;
+}
+
+/* 7 天柱状图容器 */
+.weekly-chart {
+  padding: 16px;
+  background-color: #ffffff;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.weekly-chart__title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2933;
+}
+
+/* 固定高度画布，配合 Recharts ResponsiveContainer 自适应宽度 */
+.weekly-chart__canvas {
+  width: 100%;
+  height: 320px;
+}
+
+/* 图表空态占位 */
+.weekly-chart--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+
+.weekly-chart__empty-text {
+  color: #7b8794;
+  font-size: 14px;
+}
+
+/* ============================================================
+   智能电力交易功能区（需求 4）
+   ============================================================ */
+.trading-page__heading {
+  font-size: 22px;
+  margin: 0 0 16px;
+}
+
+.trading-page__subheading {
+  font-size: 16px;
+  margin: 20px 0 12px;
+}
+
+/* 两栏布局：左侧策略管理，右侧市场行情；窄屏自动堆叠 */
+.trading-page__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .trading-page__layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.trading-page__action-error {
+  margin: 0 0 12px;
+  color: #a61b1b;
+  font-size: 13px;
+}
+
+/* —— 策略创建表单 —— */
+.strategy-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background-color: #ffffff;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+}
+
+.strategy-form__title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.strategy-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.strategy-form__field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.strategy-form__field label {
+  font-size: 13px;
+  color: #52606d;
+}
+
+.strategy-form__field input,
+.strategy-form__field select {
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid #cbd2d9;
+  border-radius: 6px;
+}
+
+.strategy-form__error {
+  margin: 0;
+  color: #a61b1b;
+  font-size: 12px;
+}
+
+.strategy-form__success {
+  margin: 0;
+  color: #157a3f;
+  font-size: 13px;
+}
+
+.strategy-form__submit {
+  align-self: flex-start;
+  padding: 8px 18px;
+  background-color: #1971c2;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.strategy-form__submit:disabled {
+  background-color: #9bb8d3;
+  cursor: not-allowed;
+}
+
+/* —— 策略列表 —— */
+.strategy-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.strategy-list__empty,
+.action-history__empty {
+  padding: 24px;
+  text-align: center;
+  color: #7b8794;
+  background-color: #ffffff;
+  border: 1px dashed #cbd2d9;
+  border-radius: 8px;
+}
+
+.strategy-item {
+  padding: 14px 16px;
+  background-color: #ffffff;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+}
+
+.strategy-item__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.strategy-item__name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+/* 启用状态徽章：文本 + 颜色双重标识 */
+.strategy-item__status {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+
+.strategy-item__status--enabled {
+  color: #157a3f;
+  background-color: #e6f4ea;
+}
+
+.strategy-item__status--disabled {
+  color: #62707b;
+  background-color: #eceff1;
+}
+
+.strategy-item__detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #52606d;
+}
+
+.strategy-item__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.strategy-item__toggle,
+.strategy-item__delete {
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid #cbd2d9;
+  background-color: #f5f7fa;
+  cursor: pointer;
+}
+
+.strategy-item__delete {
+  color: #a61b1b;
+  border-color: #f0c2c2;
+  background-color: #fff5f5;
+}
+
+.strategy-item__toggle:disabled,
+.strategy-item__delete:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* —— 市场行情面板 —— */
+.trading-page__market {
+  padding: 16px;
+  background-color: #ffffff;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+}
+
+.market-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  background-color: #f0f6ff;
+  border-radius: 8px;
+}
+
+.market-panel__label {
+  font-size: 13px;
+  color: #52606d;
+}
+
+.market-panel__price {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1971c2;
+}
+
+/* —— 触发历史 —— */
+.action-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-history__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background-color: #f5f7fa;
+  border-radius: 6px;
+}
+
+.action-history__time {
+  color: #7b8794;
+}
+
+.action-history__name {
+  font-weight: 600;
+}
+
+.action-history__action {
+  color: #1971c2;
+}
+
+.action-history__price {
+  color: #52606d;
+}
