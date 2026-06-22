@@ -35,6 +35,13 @@ export interface RequestOptions {
   /** 附加请求头 */
   headers?: Record<string, string>;
   /**
+   * 账户作用域标识（需求 6.5、6.6）。
+   * 设备/能源/交易类请求据此自动附加 `?accountId=...` 查询参数，使后端按
+   * Current_Account 过滤数据。该值由调用方（任务 21.20 的 AccountContext）提供，
+   * 本模块不硬编码任何账户标识；缺省或空字符串时不附加，URL 保持原样。
+   */
+  accountId?: string;
+  /**
    * 请求体（将以 JSON 序列化）。
    * 仅在 method 为 POST/PUT/PATCH/DELETE 等需要携带 body 时使用。
    */
@@ -109,9 +116,46 @@ function statusToErrorType(status: number): DataErrorType {
 const DEFAULT_ERROR_MESSAGE: Record<DataErrorType, string> = {
   NOT_FOUND: "请求的数据不存在",
   VALIDATION: "输入校验失败",
+  ACCOUNT_LIMIT: "账户数量已达上限 5 个",
+  LAST_ACCOUNT: "至少需保留 1 个账户",
   PROVIDER_ERROR: "服务暂时不可用，请稍后重试",
   TIMEOUT: "请求超时，请稍后重试",
 };
+
+// ============================================================
+// 账户作用域：URL 附加 accountId 查询参数（需求 6.5、6.6）
+// ============================================================
+
+/**
+ * 将账户标识 `accountId` 作为查询参数附加到请求 URL（需求 6.5、6.6）。
+ *
+ * 行为约定：
+ *   - `accountId` 缺省或为空字符串时不修改 URL（由调用方决定是否附加，避免硬编码）；
+ *   - URL 已含查询参数时用 `&` 连接，否则用 `?`；
+ *   - 保留 URL 中可能存在的 hash 片段，将查询参数插入到 hash 之前；
+ *   - 对 `accountId` 进行 URL 编码，防止特殊字符破坏查询串。
+ *
+ * 参数:
+ *   url (string): 原始请求地址（同源 API 路由，如 "/api/devices"）
+ *   accountId (string | undefined): 当前账户标识；由调用方（AccountContext）提供
+ *
+ * 返回:
+ *   string: 附加 accountId 后的请求地址；无需附加时原样返回
+ */
+export function appendAccountId(url: string, accountId?: string): string {
+  // accountId 为空时不修改 URL，保持原有语义
+  if (accountId === undefined || accountId === "") {
+    return url;
+  }
+  // 分离 hash 片段，确保查询参数插入在 hash 之前
+  const hashIndex = url.indexOf("#");
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : "";
+  const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
+  // 已有查询参数则用 & 连接，否则用 ?
+  const separator = base.includes("?") ? "&" : "?";
+  const encoded = encodeURIComponent(accountId);
+  return `${base}${separator}accountId=${encoded}${hash}`;
+}
 
 // ============================================================
 // 核心：带超时的 JSON 请求
@@ -131,7 +175,7 @@ const DEFAULT_ERROR_MESSAGE: Record<DataErrorType, string> = {
  *
  * 参数:
  *   url (string): 请求地址（同源 API 路由，如 "/api/devices"）
- *   options (RequestOptions): 请求选项（方法、超时、请求体等）
+ *   options (RequestOptions): 请求选项（方法、超时、请求体、账户作用域等）
  *
  * 返回:
  *   Promise<Result<T>>: 成功 { ok: true, data }，失败 { ok: false, error }
@@ -145,8 +189,12 @@ export async function requestJson<T>(
     method = "GET",
     headers,
     body,
+    accountId,
     signal: externalSignal,
   } = options;
+
+  // 按需附加账户作用域查询参数（需求 6.5、6.6）；accountId 为空时 URL 原样不变
+  const finalUrl = appendAccountId(url, accountId);
 
   // 内部超时控制器：到时主动中止请求
   const controller = new AbortController();
@@ -177,7 +225,7 @@ export async function requestJson<T>(
       ...headers,
     };
 
-    const response = await fetch(url, {
+    const response = await fetch(finalUrl, {
       method,
       headers: finalHeaders,
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -260,14 +308,17 @@ async function parseEnvelope<T>(
  *
  * 参数:
  *   url (string): 请求地址
- *   options ({ timeoutMs?, headers?, signal? }): 可选项（超时缺省 10s）
+ *   options ({ timeoutMs?, headers?, signal?, accountId? }): 可选项（超时缺省 10s）
  *
  * 返回:
  *   Promise<Result<T>>: 统一返回类型
  */
 export function getJson<T>(
   url: string,
-  options: Pick<RequestOptions, "timeoutMs" | "headers" | "signal"> = {}
+  options: Pick<
+    RequestOptions,
+    "timeoutMs" | "headers" | "signal" | "accountId"
+  > = {}
 ): Promise<Result<T>> {
   return requestJson<T>(url, { ...options, method: "GET" });
 }
@@ -280,7 +331,7 @@ export function getJson<T>(
  *   url (string): 请求地址
  *   method (HttpMethod): HTTP 方法
  *   body (unknown): 请求体（将以 JSON 序列化；可省略）
- *   options ({ timeoutMs?, headers?, signal? }): 可选项（超时缺省 10s）
+ *   options ({ timeoutMs?, headers?, signal?, accountId? }): 可选项（超时缺省 10s）
  *
  * 返回:
  *   Promise<Result<T>>: 统一返回类型
@@ -289,7 +340,10 @@ export function sendJson<T>(
   url: string,
   method: Exclude<HttpMethod, "GET">,
   body?: unknown,
-  options: Pick<RequestOptions, "timeoutMs" | "headers" | "signal"> = {}
+  options: Pick<
+    RequestOptions,
+    "timeoutMs" | "headers" | "signal" | "accountId"
+  > = {}
 ): Promise<Result<T>> {
   return requestJson<T>(url, { ...options, method, body });
 }

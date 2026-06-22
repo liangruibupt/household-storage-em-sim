@@ -80,6 +80,47 @@ body {
 }
 
 /* ============================================================
+   导航区账户切换器 AccountSwitcher（需求 6.4、6.6）
+   常驻于导航最右侧，展示账户列表（≤5）并标记 Current_Account。
+   ============================================================ */
+.account-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* 自动占据剩余空间，将切换器推到导航最右侧 */
+  margin-left: auto;
+}
+
+.account-switcher__label {
+  font-size: 13px;
+  color: #c7d2dc;
+  white-space: nowrap;
+}
+
+.account-switcher__hint {
+  font-size: 13px;
+  color: #c7d2dc;
+  white-space: nowrap;
+}
+
+.account-switcher__select {
+  max-width: 220px;
+  padding: 6px 10px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #1f2933;
+  background-color: #ffffff;
+  border: 1px solid #2b4763;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.account-switcher__select:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(77, 171, 247, 0.4);
+}
+
+/* ============================================================
    主内容区
    ============================================================ */
 .app-content {

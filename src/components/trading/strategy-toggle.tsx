@@ -17,6 +17,11 @@ export interface StrategyToggleProps {
   onToggled?: () => void;
   /** 切换失败后的回调，携带中文错误提示 */
   onError?: (message: string) => void;
+  /**
+   * 账户作用域标识（Current_Account）。PUT 请求据此附加 ?accountId=...，
+   * 仅可启停该账户名下策略（需求 6.5）。
+   */
+  accountId?: string;
 }
 
 /**
@@ -31,6 +36,7 @@ export default function StrategyToggle({
   strategy,
   onToggled,
   onError,
+  accountId,
 }: StrategyToggleProps): JSX.Element {
   // 请求进行中标记，用于禁用按钮防止重复点击
   const [submitting, setSubmitting] = useState(false);
@@ -41,7 +47,9 @@ export default function StrategyToggle({
     const result = await sendJson<TradingStrategy>(
       `/api/trading/strategies/${encodeURIComponent(strategy.id)}`,
       "PUT",
-      { enabled: !strategy.enabled }
+      { enabled: !strategy.enabled },
+      // 携带 accountId 限定作用域（需求 6.5）
+      { accountId }
     );
     setSubmitting(false);
 

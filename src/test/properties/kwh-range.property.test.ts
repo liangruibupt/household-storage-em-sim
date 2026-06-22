@@ -35,6 +35,9 @@ import type {
 // 任意固定值即可；选取一个远离精度边界的常规时间戳。
 const FIXED_NOW = 1_700_000_000_000;
 
+// 账户作用域查询入参：seed-data 默认账户以 account-001 起始编号。
+const ACCOUNT_ID = "account-001";
+
 /** 构造一个使用固定时钟的 MockProvider */
 function makeProvider(opts: {
   seed: number;
@@ -67,7 +70,7 @@ function unwrap<T>(result: Result<T>): T {
   return result.data;
 }
 
-/** 收集一台/全部设备的全部 chargeKwh 与 dischargeKwh 值 */
+/** 收集一台/全部设备的全部 chargeKwh 与 dischargeKwh 值（账户作用域，需求 6.5） */
 async function collectKwhValues(
   provider: MockProvider,
   deviceId?: string
@@ -75,13 +78,15 @@ async function collectKwhValues(
   const values: number[] = [];
 
   const weekly: ChargeDischargeRecord[] = unwrap(
-    await provider.getWeeklyRecords(deviceId)
+    await provider.getWeeklyRecords(ACCOUNT_ID, deviceId)
   );
   for (const r of weekly) {
     values.push(r.chargeKwh, r.dischargeKwh);
   }
 
-  const summary: DailySummary = unwrap(await provider.getTodaySummary(deviceId));
+  const summary: DailySummary = unwrap(
+    await provider.getTodaySummary(ACCOUNT_ID, deviceId)
+  );
   values.push(summary.totalChargeKwh, summary.totalDischargeKwh);
 
   return values;
@@ -109,7 +114,7 @@ describe("Property 8: 充放电值域不变量", () => {
           }
 
           // 2) 逐台设备视角（覆盖单设备路径）
-          const devices = unwrap(await provider.listDevices());
+          const devices = unwrap(await provider.listDevices(ACCOUNT_ID));
           for (const d of devices) {
             const perDevice = await collectKwhValues(provider, d.id);
             for (const v of perDevice) {
@@ -135,7 +140,7 @@ describe("Property 8: 充放电值域不变量", () => {
             recordDays: 1,
           });
 
-          const weekly = unwrap(await provider.getWeeklyRecords());
+          const weekly = unwrap(await provider.getWeeklyRecords(ACCOUNT_ID));
           // 窗口共 7 天，仅当日有数据 → 至少存在零填充日
           const zeroFilled = weekly.filter(
             (r) => r.chargeKwh === 0 && r.dischargeKwh === 0

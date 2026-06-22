@@ -20,6 +20,19 @@ vi.mock("@/lib/http/client", () => ({
   getJson: vi.fn(),
 }));
 
+// DevicesPage 消费 AccountContext 读取 currentAccountId。mock useAccount 返回固定
+// Current_Account，使页面在无 Provider 的单元测试中确定性发起 account-001 作用域请求。
+vi.mock("@/components/account/account-context", () => ({
+  useAccount: () => ({
+    accounts: [],
+    currentAccountId: "account-001",
+    loading: false,
+    error: null,
+    setCurrentAccount: vi.fn(),
+    refreshAccounts: vi.fn(),
+  }),
+}));
+
 import { getJson } from "@/lib/http/client";
 import StatusBadge from "@/components/devices/status-badge";
 import DeviceList from "@/components/devices/device-list";
@@ -43,6 +56,8 @@ function makeDevice(
 ): Device {
   return {
     id,
+    // 多账户模型：设备归属当前账户（需求 6.4）
+    accountId: "account-001",
     name,
     connectionStatus: status,
     lastReportedAt: "2024-05-20T08:30:00Z",
@@ -144,6 +159,7 @@ describe("DeviceDetail 设备详情（需求 1.8）", () => {
   it("展示名称、唯一标识、连接状态与精确到秒的更新时间", async () => {
     const detail: DeviceDetailModel = {
       id: "d1",
+      accountId: "account-001",
       name: "客厅储能",
       connectionStatus: "online",
       lastReportedAt: "2024-05-20T08:30:00Z",
@@ -164,8 +180,10 @@ describe("DeviceDetail 设备详情（需求 1.8）", () => {
     // 精确到秒的时间格式：YYYY-MM-DD HH:mm:ss，且秒位为 07
     expect(container.textContent).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:07/);
 
-    // 经由 HTTP 客户端封装访问对应详情端点
-    expect(mockGetJson).toHaveBeenCalledWith("/api/devices/d1");
+    // 经由 HTTP 客户端封装访问对应详情端点（accountId 作为选项透传）
+    expect(
+      mockGetJson.mock.calls.some((c) => c[0] === "/api/devices/d1")
+    ).toBe(true);
   });
 });
 
@@ -254,6 +272,7 @@ describe("DevicesPage 设备监控页面（需求 1.5、1.7）", () => {
     const list1 = [makeDevice("d1", "设备一", "online")];
     const detail: DeviceDetailModel = {
       id: "d1",
+      accountId: "account-001",
       name: "设备一",
       connectionStatus: "online",
       lastReportedAt: "2024-05-20T08:30:00Z",
@@ -275,7 +294,9 @@ describe("DevicesPage 设备监控页面（需求 1.5、1.7）", () => {
     const detailRegion = await screen.findByText("设备详情");
     expect(detailRegion).toBeInTheDocument();
     expect(await screen.findByText("唯一标识")).toBeInTheDocument();
-    // 详情请求经由 HTTP 客户端封装发起
-    expect(mockGetJson).toHaveBeenCalledWith("/api/devices/d1");
+    // 详情请求经由 HTTP 客户端封装发起（accountId 作为选项透传）
+    expect(
+      mockGetJson.mock.calls.some((c) => c[0] === "/api/devices/d1")
+    ).toBe(true);
   });
 });

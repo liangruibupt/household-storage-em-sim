@@ -1,25 +1,26 @@
-// Mock 数据基础设施：确定性种子数据（需求 1.1、3.7、5.2、6.4）
+// Mock 数据基础设施：确定性多账户种子数据（需求 1.1、2.4、3.7、5.2、6.4、6.5）
 //
 // 设计文档（Mock_Provider 设计 / 确定性与种子化、内存状态与持久化语义）要求：
 //   由固定 seed 驱动的可种子化 PRNG（见 ./rng.ts）生成一组**确定性、可复现**的
 //   初始数据，作为 MockProvider 进程内内存态的初始快照。本模块仅负责「生成种子数据」，
-//   不实现 MockProvider 本身（属于任务 10.x）。
+//   不实现 MockProvider 本身（属于任务 21.3 的 mock-provider.ts）。
 //
-// 生成的数据满足以下不变量：
-//   - 设备数量不超过 200（需求 1.1 / Property 1）。
+// 多账户模型（需求 6.4：注册上限 5；默认种子化 2 个账户）下，生成的数据满足以下不变量：
+//   - 平台默认种子化**多个账户（默认 2 个，≤ 5）**，每个 Account 拥有独立的 AccountProfile
+//     与名下归属的 Device[] / ChargeDischargeRecord[] / TradingStrategy[]，
+//     且每条业务数据均带正确的 accountId（需求 6.4、6.5 / Property 21）。
+//   - 单个账户的设备数量不超过 200（需求 1.1 / Property 1）。
 //   - 设备 lastReportedAt 由 seed 决定相对「当前时间」now 的偏移，
-//     覆盖在线/离线 60 秒窗口的两侧边界，便于验证连接状态判定（需求 1.2、1.3 / Property 3）。
+//     在每个账户内部均覆盖在线/离线 60 秒窗口的两侧边界（需求 1.2、1.3 / Property 3）。
 //   - 充放电数值在**生成阶段**即钳制（clamp）到 [0, 999999999.99]，
 //     从源头满足充放电值域不变量（需求 3.7 / Property 8）。
-//   - 全部数据归属**单一 User**（注册数量上限 1，需求 6.4）：仅生成一份 AccountProfile，
-//     设备、策略、充放电记录均属于该唯一用户。
 //   - 充放电原始记录覆盖足够天数，以支撑「当日总量」与「含当日在内向前回溯 7 个自然日」
 //     的聚合（需求 3.2、3.3）；7 天零填充由 weekly.ts 的 buildWeeklyRecords 在读取时即时派生。
 //
 // 确定性说明：给定相同的 seed 与 now，本模块产出的全部数据完全一致，使属性测试可稳定重放。
 
 import type {
-  AccountProfile,
+  Account,
   ChargeDischargeRecord,
   Device,
   PriceComparator,
@@ -33,7 +34,13 @@ import { ONLINE_WINDOW_MS, deriveConnectionStatus } from "../../domain/connectio
 // 常量与边界（与领域类型、设计文档保持一致）
 // ============================================================
 
-/** 设备数量上限（需求 1.1 / Property 1）：listDevices 与种子数据均不得超过此值 */
+/** 账户注册数量上限（需求 2.5、6.4）：账户总数不得超过此值 */
+export const MAX_ACCOUNTS = 5;
+
+/** 默认种子化账户数量（需求 6.4：默认 2 个，且 ≤ MAX_ACCOUNTS） */
+export const DEFAULT_ACCOUNT_COUNT = 2;
+
+/** 单账户设备数量上限（需求 1.1 / Property 1）：listDevices 与种子数据均不得超过此值 */
 export const MAX_DEVICES = 200;
 
 /** 充放电数值下界（需求 3.7 / Property 8） */
@@ -48,8 +55,8 @@ export const PRICE_THRESHOLD_MAX = 999999.99;
 /** 默认固定种子：保证默认情况下种子数据可复现（需求 5.2） */
 export const DEFAULT_SEED = 0x5eed; // 24301，任意固定值，仅需稳定
 
-/** 默认生成的设备数量（≤ MAX_DEVICES）；包含覆盖在线/离线两侧的样本 */
-export const DEFAULT_DEVICE_COUNT = 24;
+/** 单账户默认生成的设备数量（≤ MAX_DEVICES）；包含覆盖在线/离线两侧的样本 */
+export const DEFAULT_DEVICE_COUNT = 12;
 
 /**
  * 充放电原始记录覆盖的自然日天数（含当日）。
@@ -58,7 +65,7 @@ export const DEFAULT_DEVICE_COUNT = 24;
  */
 export const DEFAULT_RECORD_DAYS = 10;
 
-/** 默认生成的初始交易策略数量 */
+/** 单账户默认生成的初始交易策略数量 */
 export const DEFAULT_STRATEGY_COUNT = 4;
 
 // ============================================================
@@ -66,20 +73,28 @@ export const DEFAULT_STRATEGY_COUNT = 4;
 // ============================================================
 
 /**
- * 种子数据快照：MockProvider 内存态的初始来源。
+ * 单个账户的种子数据快照：包含该账户实体及其名下归属的全部业务数据。
  *
  * 充放电记录以「设备 id -> 该设备的逐日记录」的映射形式给出，
  * 以便上层既能按 deviceId 取单台设备数据，也能跨设备汇总（需求 3.1、3.4）。
  */
-export interface SeedData {
-  /** 唯一用户的账户资料（需求 6.4：注册上限 1，仅一份） */
-  account: AccountProfile;
-  /** 设备列表（≤ 200，需求 1.1） */
+export interface SeededAccount {
+  /** 账户实体（id + profile，需求 2.4、6.4） */
+  account: Account;
+  /** 该账户名下的设备列表（≤ 200，需求 1.1，每条带 accountId） */
   devices: Device[];
-  /** 按设备 id 索引的充放电原始记录（逐自然日，已钳制到合法值域） */
+  /** 按设备 id 索引的充放电原始记录（逐自然日，已钳制到合法值域，每条带 accountId + deviceId） */
   recordsByDevice: Record<string, ChargeDischargeRecord[]>;
-  /** 初始交易策略列表 */
+  /** 该账户名下的初始交易策略列表（每条带 accountId） */
   strategies: TradingStrategy[];
+}
+
+/**
+ * 种子数据快照：MockProvider 内存态的初始来源（多账户）。
+ */
+export interface SeedData {
+  /** 种子化的账户集合（1–5 个，需求 6.4） */
+  accounts: SeededAccount[];
 }
 
 /** 种子数据生成选项 */
@@ -88,11 +103,13 @@ export interface SeedDataOptions {
   seed?: number;
   /** 「当前时间」基准（epoch 毫秒）；设备上报时间与记录日期相对此值计算，默认 Date.now() */
   now?: number;
-  /** 设备数量；将被钳制到 [0, MAX_DEVICES] */
+  /** 账户数量；将被钳制到 [1, MAX_ACCOUNTS]（需求 6.4） */
+  accountCount?: number;
+  /** 单账户设备数量；将被钳制到 [0, MAX_DEVICES] */
   deviceCount?: number;
   /** 充放电记录覆盖天数（含当日） */
   recordDays?: number;
-  /** 初始策略数量 */
+  /** 单账户初始策略数量 */
   strategyCount?: number;
 }
 
@@ -161,7 +178,7 @@ function formatLocalDay(date: Date): string {
 }
 
 /**
- * 生成形如 "device-001" 的稳定设备 id。
+ * 生成形如 "account-001" 的稳定账户 id。
  *
  * 参数:
  *   index (number): 从 0 起的序号
@@ -169,8 +186,34 @@ function formatLocalDay(date: Date): string {
  * 返回:
  *   string: 补零到 3 位的稳定标识
  */
-function deviceId(index: number): string {
-  return `device-${String(index + 1).padStart(3, "0")}`;
+function accountId(index: number): string {
+  return `account-${String(index + 1).padStart(3, "0")}`;
+}
+
+/**
+ * 生成形如 "device-001" 的稳定设备 id（全局唯一序号，跨账户递增）。
+ *
+ * 参数:
+ *   seq (number): 从 1 起的全局序号
+ *
+ * 返回:
+ *   string: 补零到 3 位的稳定标识
+ */
+function deviceId(seq: number): string {
+  return `device-${String(seq).padStart(3, "0")}`;
+}
+
+/**
+ * 生成形如 "strategy-001" 的稳定策略 id（全局唯一序号，跨账户递增）。
+ *
+ * 参数:
+ *   seq (number): 从 1 起的全局序号
+ *
+ * 返回:
+ *   string: 补零到 3 位的稳定标识
+ */
+function strategyId(seq: number): string {
+  return `strategy-${String(seq).padStart(3, "0")}`;
 }
 
 // ============================================================
@@ -178,36 +221,41 @@ function deviceId(index: number): string {
 // ============================================================
 
 /**
- * 生成唯一用户的账户资料（需求 6.4：注册上限 1，仅生成一份）。
+ * 生成单个账户的账户资料（需求 2.4、6.4）。
  *
  * 字段均落在校验约束内：姓名 1–50、邮箱标准格式且 ≤254、
- * 电话 5–20 且仅含 [0-9 + - 空格]、地址 ≤200。
+ * 电话 5–20 且仅含 [0-9 + - 空格]、地址 ≤200。由 seed 与账户序号共同决定取值，
+ * 使不同账户拥有不同资料且整体可复现。
  *
  * 参数:
  *   rng (Rng): 可种子化随机数生成器
+ *   index (number): 账户序号（从 0 起），用于区分不同账户
  *
  * 返回:
- *   AccountProfile: 单一用户账户资料
+ *   Account: 账户实体（id + profile）
  */
-function generateAccount(rng: Rng): AccountProfile {
+function generateAccount(rng: Rng, index: number): Account {
   // 候选池均为合法值，由 seed 决定具体取值，保证确定性
-  const names = ["张伟", "李娜", "王芳", "刘洋", "陈静"];
+  const names = ["张伟", "李娜", "王芳", "刘洋", "陈静", "赵磊", "孙婷"];
   const cities = ["beijing", "shanghai", "shenzhen", "hangzhou", "chengdu"];
 
   const name = names[rng.intInRange(0, names.length - 1)];
   const city = cities[rng.intInRange(0, cities.length - 1)];
-  // 邮箱本地部分附带一个由 seed 决定的编号，整体为标准格式且远小于 254 字符
-  const email = `${city}.user${rng.intInRange(100, 999)}@example.com`;
+  // 邮箱本地部分附带账户序号与随机编号，整体为标准格式且远小于 254 字符，并保证跨账户互不相同
+  const email = `${city}.user${index + 1}.${rng.intInRange(100, 999)}@example.com`;
   // 电话仅含合法字符 [0-9 + - 空格]，长度落在 5–20 之间
   const phone = `+86 138-${rng.intInRange(1000, 9999)}-${rng.intInRange(1000, 9999)}`;
   // 地址远小于 200 字符
   const address = `${city} city, district ${rng.intInRange(1, 12)}, road ${rng.intInRange(1, 200)}`;
 
-  return { name, email, phone, address };
+  return {
+    id: accountId(index),
+    profile: { name, email, phone, address },
+  };
 }
 
 /**
- * 生成设备列表，确保数量 ≤ 200，并覆盖在线/离线 60 秒窗口两侧边界。
+ * 为单个账户生成设备列表，确保数量 ≤ 200，并在该账户内部覆盖在线/离线 60 秒窗口两侧边界。
  *
  * lastReportedAt 由「now 减去 seed 决定的偏移」得到：
  *   - 偏移 ≤ 60000ms -> 在线；偏移 > 60000ms -> 离线（需求 1.3 / Property 3）。
@@ -219,15 +267,24 @@ function generateAccount(rng: Rng): AccountProfile {
  *   rng (Rng): 可种子化随机数生成器
  *   now (number): 「当前时间」基准（epoch 毫秒）
  *   count (number): 期望设备数量（将被钳制到 [0, MAX_DEVICES]）
+ *   ownerId (string): 归属账户 id（写入每台设备的 accountId）
+ *   startSeq (number): 全局设备序号起点（从该值 + 1 开始分配 id）
  *
  * 返回:
- *   Device[]: 设备列表
+ *   { devices: Device[]; nextSeq: number }: 设备列表与更新后的全局序号
  */
-function generateDevices(rng: Rng, now: number, count: number): Device[] {
+function generateDevices(
+  rng: Rng,
+  now: number,
+  count: number,
+  ownerId: string,
+  startSeq: number
+): { devices: Device[]; nextSeq: number } {
   // 钳制设备数量到 [0, 200]，从源头满足设备数量上限不变量（需求 1.1 / Property 1）
   const total = Math.min(Math.max(Math.trunc(count), 0), MAX_DEVICES);
 
   const devices: Device[] = [];
+  let seq = startSeq;
   for (let i = 0; i < total; i++) {
     let offsetMs: number;
 
@@ -243,27 +300,33 @@ function generateDevices(rng: Rng, now: number, count: number): Device[] {
     }
 
     const lastReportedAt = new Date(now - offsetMs).toISOString();
+    seq += 1;
 
     devices.push({
-      id: deviceId(i),
-      name: `储能设备 ${String(i + 1).padStart(3, "0")}`,
+      id: deviceId(seq),
+      // 归属账户（需求 6.4 / Property 21）
+      accountId: ownerId,
+      name: `储能设备 ${String(seq).padStart(3, "0")}`,
       // 连接状态由 60 秒窗口即时派生，保持取值封闭于 {online, offline}（需求 1.2、1.3）
       connectionStatus: deriveConnectionStatus(lastReportedAt, now),
       lastReportedAt,
     });
   }
 
-  return devices;
+  return { devices, nextSeq: seq };
 }
 
 /**
  * 为单台设备生成覆盖最近若干自然日（含当日）的充放电原始记录。
- * 每条记录的 chargeKwh / dischargeKwh 在生成阶段即钳制到 [0, 999999999.99]（需求 3.7 / Property 8）。
+ * 每条记录的 chargeKwh / dischargeKwh 在生成阶段即钳制到 [0, 999999999.99]（需求 3.7 / Property 8），
+ * 并携带正确的 accountId 与 deviceId 归属（需求 6.4 / Property 21）。
  *
  * 参数:
  *   rng (Rng): 可种子化随机数生成器
  *   now (number): 「当前时间」基准（epoch 毫秒）
  *   days (number): 覆盖天数（含当日），将被钳制到 ≥ 1
+ *   ownerId (string): 归属账户 id
+ *   ownerDeviceId (string): 归属设备 id
  *
  * 返回:
  *   ChargeDischargeRecord[]: 按日期升序排列的逐日记录
@@ -271,7 +334,9 @@ function generateDevices(rng: Rng, now: number, count: number): Device[] {
 function generateDeviceRecords(
   rng: Rng,
   now: number,
-  days: number
+  days: number,
+  ownerId: string,
+  ownerDeviceId: string
 ): ChargeDischargeRecord[] {
   // 至少覆盖 1 天，保证「当日总量」可计算
   const span = Math.max(Math.trunc(days), 1);
@@ -293,6 +358,8 @@ function generateDeviceRecords(
     const dischargeKwh = clampKwh(rng.floatInRange(0, 80));
 
     records.push({
+      accountId: ownerId,
+      deviceId: ownerDeviceId,
       date: formatLocalDay(dayDate),
       chargeKwh,
       dischargeKwh,
@@ -303,18 +370,26 @@ function generateDeviceRecords(
 }
 
 /**
- * 生成初始交易策略列表。
+ * 为单个账户生成初始交易策略列表。
  * 各字段均落在校验约束内：名称 1–100、action ∈ 4 种枚举、comparator ∈ 5 种枚举、
- * priceThreshold ∈ [0, 999999.99]；triggered 初始为 false（去抖状态未触发，需求 4.10）。
+ * priceThreshold ∈ [0, 999999.99]；triggered 初始为 false（去抖状态未触发，需求 4.10）；
+ * accountId 归属该账户（需求 4.3、6.4）。
  *
  * 参数:
  *   rng (Rng): 可种子化随机数生成器
  *   count (number): 策略数量（将被钳制到 ≥ 0）
+ *   ownerId (string): 归属账户 id
+ *   startSeq (number): 全局策略序号起点（从该值 + 1 开始分配 id）
  *
  * 返回:
- *   TradingStrategy[]: 初始策略列表
+ *   { strategies: TradingStrategy[]; nextSeq: number }: 策略列表与更新后的全局序号
  */
-function generateStrategies(rng: Rng, count: number): TradingStrategy[] {
+function generateStrategies(
+  rng: Rng,
+  count: number,
+  ownerId: string,
+  startSeq: number
+): { strategies: TradingStrategy[]; nextSeq: number } {
   const total = Math.max(Math.trunc(count), 0);
 
   // 4 种动作与 5 种比较关系，与领域类型枚举保持一致
@@ -337,14 +412,18 @@ function generateStrategies(rng: Rng, count: number): TradingStrategy[] {
   ];
 
   const strategies: TradingStrategy[] = [];
+  let seq = startSeq;
   for (let i = 0; i < total; i++) {
     const action = actions[rng.intInRange(0, actions.length - 1)];
     const comparator = comparators[rng.intInRange(0, comparators.length - 1)];
     // 电价阈值取家庭电价合理量级（约 0–3 元/kWh），并钳制到合法上界
     const priceThreshold = clampPriceThreshold(rng.floatInRange(0, 3));
+    seq += 1;
 
     strategies.push({
-      id: `strategy-${String(i + 1).padStart(3, "0")}`,
+      id: strategyId(seq),
+      // 归属账户（需求 4.3、6.4 / Property 21）
+      accountId: ownerId,
       name: names[i % names.length],
       action,
       condition: { comparator, priceThreshold },
@@ -355,7 +434,7 @@ function generateStrategies(rng: Rng, count: number): TradingStrategy[] {
     });
   }
 
-  return strategies;
+  return { strategies, nextSeq: seq };
 }
 
 // ============================================================
@@ -363,25 +442,27 @@ function generateStrategies(rng: Rng, count: number): TradingStrategy[] {
 // ============================================================
 
 /**
- * 由固定 seed 生成一份确定性的种子数据快照。
+ * 由固定 seed 生成一份确定性的多账户种子数据快照。
  *
  * 相同的 seed 与 now 将产出完全一致的数据（需求 5.2）。生成的数据满足：
- *   - 设备数量 ≤ 200（需求 1.1）；
- *   - 设备 lastReportedAt 覆盖在线/离线 60 秒窗口两侧（需求 1.3）；
+ *   - 默认种子化 2 个账户（≤ 5），每账户拥有独立资料与名下归属数据（需求 6.4、6.5）；
+ *   - 单账户设备数量 ≤ 200（需求 1.1）；
+ *   - 每账户内设备 lastReportedAt 覆盖在线/离线 60 秒窗口两侧（需求 1.3）；
  *   - 充放电数值落在 [0, 999999999.99]（需求 3.7）；
- *   - 全部数据归属单一用户（需求 6.4）；
+ *   - 每条 Device / ChargeDischargeRecord / TradingStrategy 均带正确 accountId（Property 21）；
  *   - 充放电记录覆盖足量自然日以支撑当日总量与 7 天聚合（需求 3.2、3.3）。
  *
  * 参数:
- *   options (SeedDataOptions): 可选生成参数（seed、now、数量等）
+ *   options (SeedDataOptions): 可选生成参数（seed、now、accountCount、各类数量等）
  *
  * 返回:
- *   SeedData: 种子数据快照
+ *   SeedData: 多账户种子数据快照
  */
 export function createSeedData(options: SeedDataOptions = {}): SeedData {
   const {
     seed = DEFAULT_SEED,
     now = Date.now(),
+    accountCount = DEFAULT_ACCOUNT_COUNT,
     deviceCount = DEFAULT_DEVICE_COUNT,
     recordDays = DEFAULT_RECORD_DAYS,
     strategyCount = DEFAULT_STRATEGY_COUNT,
@@ -390,20 +471,56 @@ export function createSeedData(options: SeedDataOptions = {}): SeedData {
   // 单一 PRNG 实例驱动全部生成过程，保证整份快照在给定 seed 下完全确定
   const rng = createRng(seed);
 
-  // 1) 唯一用户账户（注册上限 1，需求 6.4）
-  const account = generateAccount(rng);
+  // 账户数量钳制到 [1, MAX_ACCOUNTS]：至少 1 个账户，且不超过注册上限（需求 6.4）
+  const totalAccounts = Math.min(
+    Math.max(Math.trunc(accountCount), 1),
+    MAX_ACCOUNTS
+  );
 
-  // 2) 设备列表（≤ 200，覆盖在线/离线两侧，需求 1.1、1.3）
-  const devices = generateDevices(rng, now, deviceCount);
+  // 全局序号计数器：设备与策略 id 跨账户递增，保证整份快照内 id 全局唯一
+  let deviceSeq = 0;
+  let strategySeq = 0;
 
-  // 3) 各设备充放电原始记录（值域已钳制，需求 3.7）
-  const recordsByDevice: Record<string, ChargeDischargeRecord[]> = {};
-  for (const device of devices) {
-    recordsByDevice[device.id] = generateDeviceRecords(rng, now, recordDays);
+  const accounts: SeededAccount[] = [];
+  for (let a = 0; a < totalAccounts; a++) {
+    // 1) 账户实体（id + profile，需求 2.4、6.4）
+    const account = generateAccount(rng, a);
+
+    // 2) 该账户名下设备列表（≤ 200，覆盖在线/离线两侧，需求 1.1、1.3）
+    const deviceResult = generateDevices(
+      rng,
+      now,
+      deviceCount,
+      account.id,
+      deviceSeq
+    );
+    deviceSeq = deviceResult.nextSeq;
+    const devices = deviceResult.devices;
+
+    // 3) 各设备充放电原始记录（值域已钳制，带 accountId + deviceId，需求 3.7、6.4）
+    const recordsByDevice: Record<string, ChargeDischargeRecord[]> = {};
+    for (const device of devices) {
+      recordsByDevice[device.id] = generateDeviceRecords(
+        rng,
+        now,
+        recordDays,
+        account.id,
+        device.id
+      );
+    }
+
+    // 4) 该账户名下初始交易策略列表（带 accountId，需求 4.3、6.4）
+    const strategyResult = generateStrategies(
+      rng,
+      strategyCount,
+      account.id,
+      strategySeq
+    );
+    strategySeq = strategyResult.nextSeq;
+    const strategies = strategyResult.strategies;
+
+    accounts.push({ account, devices, recordsByDevice, strategies });
   }
 
-  // 4) 初始交易策略列表
-  const strategies = generateStrategies(rng, strategyCount);
-
-  return { account, devices, recordsByDevice, strategies };
+  return { accounts };
 }

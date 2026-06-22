@@ -5,6 +5,8 @@
 //   - 失败：body 形如 { error: { type, message, field? } }，状态码由 error.type 决定：
 //       VALIDATION    -> 400
 //       NOT_FOUND     -> 404
+//       ACCOUNT_LIMIT -> 409
+//       LAST_ACCOUNT  -> 409
 //       TIMEOUT       -> 504
 //       PROVIDER_ERROR-> 500
 //   - 仅依赖 IDataProvider 接口，捕获意外异常并转换为 PROVIDER_ERROR，
@@ -19,6 +21,8 @@ import type { Result, DataError, DataErrorType } from "@/lib/data-access/types";
 const ERROR_STATUS: Record<DataErrorType, number> = {
   VALIDATION: 400,
   NOT_FOUND: 404,
+  ACCOUNT_LIMIT: 409, // 账户数已达上限 5 个（需求 2.5、6.4）
+  LAST_ACCOUNT: 409, // 仅剩 1 个账户，拒绝删除（需求 2.12）
   TIMEOUT: 504,
   PROVIDER_ERROR: 500,
 };
@@ -97,6 +101,35 @@ export async function parseJsonBody<T>(
  */
 export function providerErrorResponse(message = "服务内部错误"): NextResponse {
   return errorResponse({ type: "PROVIDER_ERROR", message });
+}
+
+/**
+ * 从请求查询参数中解析必填的 accountId（账户作用域，需求 6.5）。
+ *
+ * 设备/能源/交易三大功能区的接口均限定在某一账户作用域内，故请求必须携带 accountId。
+ * 缺失或为空白时返回 VALIDATION 错误（最终映射为 400）；未知 accountId 不在此处校验，
+ * 而是透传给数据访问层，由其返回 NOT_FOUND（映射为 404）。
+ *
+ * 入参接受标准 Request（NextRequest 亦兼容），统一经 URL 解析查询串。
+ *
+ * @returns 解析成功返回 { ok: true, value }，失败返回 { ok: false, error }
+ */
+export function getRequiredAccountId(
+  request: Request
+): { ok: true; value: string } | { ok: false; error: DataError } {
+  const accountId = new URL(request.url).searchParams.get("accountId");
+  // 缺失或仅含空白一律视为非法，返回 VALIDATION 并指明字段
+  if (!accountId || accountId.trim() === "") {
+    return {
+      ok: false,
+      error: {
+        type: "VALIDATION",
+        message: "缺少必填查询参数 accountId",
+        field: "accountId",
+      },
+    };
+  }
+  return { ok: true, value: accountId };
 }
 
 // ============================================================

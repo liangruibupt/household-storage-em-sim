@@ -149,3 +149,26 @@ export const invalidAccountProfile: fc.Arbitrary<InvalidAccountCase> = fc.oneof(
     .record({ name: validName, email: validEmail, phone: validPhone, address: invalidAddress })
     .map((input) => ({ input, expectedField: "address" as const }))
 );
+
+// ============================================================
+// 账户实体与标识生成器（多账户模型，需求 2.4、6.4）
+// ============================================================
+
+import type { Account } from "@/lib/data-access/types";
+
+/**
+ * 账户标识生成器：形如 "account-001" 的稳定标识。
+ * 与 seed-data.ts 的 accountId 命名保持一致，便于跨账户唯一性断言。
+ */
+export const accountIdArb: fc.Arbitrary<string> = fc
+  .integer({ min: 1, max: 999 })
+  .map((n) => `account-${String(n).padStart(3, "0")}`);
+
+/**
+ * 合法 Account 实体生成器：唯一标识 + 通过校验的账户资料（需求 2.4、6.4）。
+ * 供需要完整账户对象（含 id）的属性测试使用。
+ */
+export const validAccount: fc.Arbitrary<Account> = fc.record({
+  id: accountIdArb,
+  profile: validAccountProfile,
+});

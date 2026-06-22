@@ -1,19 +1,25 @@
-// MockProvider：IDataProvider 的当前唯一具体实现（需求 5.2、5.5）
+// MockProvider：IDataProvider 的当前唯一具体实现（多账户，需求 5.2、5.5）
 //
 // 设计文档（Mock_Provider 设计）要求：
-//   - 以 seed-data.ts 生成的确定性种子数据作为进程内内存态的初始快照；
+//   - 以 seed-data.ts 生成的确定性**多账户**种子数据作为进程内内存态的初始快照；
+//   - 支持账户（≤5）模型：除账户管理本身外，设备/充放电/交易三大功能区的数据
+//     均按 accountId 归属于某一具体账户，读写一律以 accountId 作用域过滤（需求 6.5 / Property 21）；
 //   - 所有方法永不抛出业务异常，统一返回 Result<T>，意外错误包装为 PROVIDER_ERROR；
 //   - connectionStatus 与 7 天数据在读取时由领域函数即时派生，保持与「当前时间」一致；
-//   - updateAccountProfile / createStrategy / updateStrategy / deleteStrategy 在校验通过后
-//     方修改内存态，校验失败时不改动内存（满足 Property 5、Property 10）；
+//   - 账户与业务写操作在校验通过后方修改内存态，校验失败时不改动内存
+//     （满足 Property 5、Property 10）；
+//   - createAccount 达 5 个返回 ACCOUNT_LIMIT 且不写入（Property 17）；
+//     deleteAccount 仅剩 1 个返回 LAST_ACCOUNT 且不删除（Property 18），
+//     否则级联移除该账户名下 Device / 记录 / 策略 / 触发历史并返回剩余账户标识（Property 20）；
 //   - 内置轻量触发引擎：对每条启用策略调用 evaluateTrigger，按去抖语义记录动作，
-//     历史按时间倒序且截断为最近 50 条（满足 Property 13、Property 14）。
+//     历史按账户维护、按时间倒序且截断为最近 50 条（满足 Property 13、Property 14）。
 //
-// 对应需求：1.1、1.2、1.3、1.8、2.1-2.5、3.1-3.5、3.7、4.1-4.3、4.6、4.7、4.10、4.11、5.2、5.5、5.6
+// 对应需求：1.1、1.2、1.3、1.8、2.4、2.5、2.6、2.11、2.12、2.13、3.1-3.5、3.7、
+//          4.1-4.3、4.6、4.7、4.10、4.11、5.2、5.5、5.6、6.4、6.5
 
 import type { IDataProvider } from "../provider";
 import type {
-  AccountProfile,
+  Account,
   AccountProfileInput,
   ChargeDischargeRecord,
   DailySummary,
@@ -36,6 +42,7 @@ import {
   CHARGE_DISCHARGE_MAX,
   CHARGE_DISCHARGE_MIN,
   DEFAULT_SEED,
+  MAX_ACCOUNTS,
   MAX_DEVICES,
   createSeedData,
   type SeedData,
@@ -69,12 +76,35 @@ export interface MockProviderOptions {
    * 以即时派生连接状态与当日窗口。测试可注入固定时钟以保证确定性。
    */
   clock?: () => number;
-  /** 设备数量；将被钳制到 [0, MAX_DEVICES] */
+  /** 账户数量；将被钳制到 [1, MAX_ACCOUNTS]（需求 6.4） */
+  accountCount?: number;
+  /** 单账户设备数量；将被钳制到 [0, MAX_DEVICES] */
   deviceCount?: number;
   /** 充放电记录覆盖天数（含当日） */
   recordDays?: number;
-  /** 初始策略数量 */
+  /** 单账户初始策略数量 */
   strategyCount?: number;
+}
+
+// ============================================================
+// 账户作用域内存态
+// ============================================================
+
+/**
+ * 单个账户的内存态：账户名下归属的全部业务数据。
+ * 以账户为单位组织，便于按 accountId 隔离读写与级联删除（需求 6.5、2.11）。
+ */
+interface AccountState {
+  /** 设备列表（≤ 200，需求 1.1） */
+  devices: Device[];
+  /** 按设备 id 索引的充放电原始记录（逐自然日，已钳制到合法值域） */
+  recordsByDevice: Record<string, ChargeDischargeRecord[]>;
+  /** 交易策略列表 */
+  strategies: TradingStrategy[];
+  /** 触发动作历史（内部以「最新在前」维护，需求 4.11 / Property 14） */
+  history: StrategyActionRecord[];
+  /** 当前电价（需求 4.11） */
+  currentPrice: number;
 }
 
 // ============================================================
@@ -131,7 +161,7 @@ function toSecondsPrecision(iso: string): string {
 // ============================================================
 
 /**
- * MockProvider：基于确定性种子数据的内存态数据提供者。
+ * MockProvider：基于确定性多账户种子数据的内存态数据提供者。
  *
  * 实现 IDataProvider 全部方法签名，作为当前阶段的唯一具体数据来源。
  * 未来接入真实设备 API 时，仅需在 factory.ts 的 getDataProvider() 中替换实现，
@@ -141,39 +171,31 @@ export class MockProvider implements IDataProvider {
   /** 「当前时间」时钟函数（epoch 毫秒） */
   private readonly clock: () => number;
 
-  /** 单一用户账户资料（需求 6.4：注册上限 1） */
-  private account: AccountProfile;
+  /** 账户实体集合（1–5 个，按 listAccounts 顺序维护，需求 6.4） */
+  private accounts: Account[];
 
-  /** 设备列表（≤ 200，需求 1.1） */
-  private devices: Device[];
-
-  /** 按设备 id 索引的充放电原始记录（逐自然日，已钳制到合法值域） */
-  private recordsByDevice: Record<string, ChargeDischargeRecord[]>;
-
-  /** 交易策略列表 */
-  private strategies: TradingStrategy[];
-
-  /** 触发动作历史（内部以「最新在前」维护，需求 4.11 / Property 14） */
-  private history: StrategyActionRecord[] = [];
-
-  /** 当前电价（需求 4.11） */
-  private currentPrice: number;
+  /** 按 accountId 索引的账户作用域内存态（需求 6.5） */
+  private readonly stateByAccount: Map<string, AccountState>;
 
   /** 用于模拟电价演化的独立 PRNG（与种子数据生成相隔离，保证确定性） */
   private readonly priceRng: Rng;
 
-  /** 策略 id 自增序列，保证创建的策略 id 唯一（即便经历删除） */
+  /** 账户 id 自增序列，保证创建的账户 id 唯一（即便经历删除） */
+  private accountSeq: number;
+
+  /** 策略 id 自增序列（全局），保证创建的策略 id 唯一（即便经历删除） */
   private strategySeq: number;
 
   /**
    * 构造一个 MockProvider 实例。
    *
-   * @param options 构造选项（seed、clock、数量等）
+   * @param options 构造选项（seed、clock、accountCount、各类数量等）
    */
   constructor(options: MockProviderOptions = {}) {
     const {
       seed = DEFAULT_SEED,
       clock = Date.now,
+      accountCount,
       deviceCount,
       recordDays,
       strategyCount,
@@ -187,38 +209,185 @@ export class MockProvider implements IDataProvider {
     const seedData: SeedData = createSeedData({
       seed,
       now: baseNow,
+      accountCount,
       deviceCount,
       recordDays,
       strategyCount,
     });
 
-    this.account = seedData.account;
-    this.devices = seedData.devices;
-    this.recordsByDevice = seedData.recordsByDevice;
-    this.strategies = seedData.strategies;
-
-    // 策略自增序列从初始策略数量开始，下一次创建从 strategies.length + 1 起
-    this.strategySeq = seedData.strategies.length;
-
     // 电价 PRNG 以与种子数据不同的种子初始化，避免序列耦合
     this.priceRng = createRng((seed ^ 0x9e3779b9) >>> 0);
-    // 初始电价落在 [0, PRICE_MAX]，保留 2 位小数
-    this.currentPrice = roundTo2(this.priceRng.floatInRange(0, PRICE_MAX));
+
+    this.accounts = [];
+    this.stateByAccount = new Map<string, AccountState>();
+
+    // 全局策略序号：从已种子化的策略总数开始，下一次创建从总数 + 1 起
+    let totalStrategies = 0;
+
+    // 将种子数据装载为账户作用域内存态
+    for (const seeded of seedData.accounts) {
+      this.accounts.push({
+        id: seeded.account.id,
+        profile: { ...seeded.account.profile },
+      });
+      this.stateByAccount.set(seeded.account.id, {
+        devices: seeded.devices,
+        recordsByDevice: seeded.recordsByDevice,
+        strategies: seeded.strategies,
+        history: [],
+        // 每个账户初始电价独立抽取，落在 [0, PRICE_MAX]，保留 2 位小数
+        currentPrice: roundTo2(this.priceRng.floatInRange(0, PRICE_MAX)),
+      });
+      totalStrategies += seeded.strategies.length;
+    }
+
+    // 账户自增序列从已种子化账户数量开始（账户 id 形如 account-001..account-00N）
+    this.accountSeq = this.accounts.length;
+    this.strategySeq = totalStrategies;
   }
 
   // ============================================================
-  // 设备方法（任务 10.1，需求 1.1、1.2、1.3、1.8）
+  // 账户方法（需求 2.4、2.5、2.6、2.11、2.12、2.13、6.4）
+  // ============================================================
+
+  /** 返回全部账户（≤ 5），用于账户列表与切换器（需求 2.1、6.4） */
+  async listAccounts(): Promise<Result<Account[]>> {
+    try {
+      return ok(this.accounts.map((a) => this.cloneAccount(a)));
+    } catch (e) {
+      return fail("PROVIDER_ERROR", `获取账户列表失败：${(e as Error).message}`);
+    }
+  }
+
+  /** 返回单个账户（含资料）；不存在则 NOT_FOUND */
+  async getAccount(accountId: string): Promise<Result<Account>> {
+    try {
+      const account = this.accounts.find((a) => a.id === accountId);
+      if (!account) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+      return ok(this.cloneAccount(account));
+    } catch (e) {
+      return fail("PROVIDER_ERROR", `获取账户失败：${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 创建新账户：校验通过且现有账户数 < 5 时持久化并返回新账户；
+   * 字段非法返回 VALIDATION，已达 5 个返回 ACCOUNT_LIMIT（均不持久化，需求 2.4、2.5、6.4）。
+   */
+  async createAccount(input: AccountProfileInput): Promise<Result<Account>> {
+    try {
+      // 先做字段校验：失败返回 VALIDATION 且不写入（需求 2.7-2.9 / Property 5）
+      const validated = validateAccountProfile(input);
+      if (!validated.ok) {
+        return validated;
+      }
+
+      // 校验通过后再检查数量上限：已达 5 个返回 ACCOUNT_LIMIT 且不写入（需求 2.5 / Property 17）
+      if (this.accounts.length >= MAX_ACCOUNTS) {
+        return fail("ACCOUNT_LIMIT", `账户数量已达上限 ${MAX_ACCOUNTS} 个`);
+      }
+
+      // 分配唯一 id 并写入；为新账户初始化空的作用域内存态
+      this.accountSeq += 1;
+      const id = `account-${String(this.accountSeq).padStart(3, "0")}`;
+      const account: Account = { id, profile: { ...validated.data } };
+      this.accounts.push(account);
+      this.stateByAccount.set(id, {
+        devices: [],
+        recordsByDevice: {},
+        strategies: [],
+        history: [],
+        currentPrice: roundTo2(this.priceRng.floatInRange(0, PRICE_MAX)),
+      });
+      return ok(this.cloneAccount(account));
+    } catch (e) {
+      return fail("PROVIDER_ERROR", `创建账户失败：${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 更新指定账户资料：校验通过则仅更新该账户并返回最新值；
+   * 校验失败返回 VALIDATION 且不改动原值；账户不存在返回 NOT_FOUND；不影响其他账户（需求 2.6 / Property 4）。
+   */
+  async updateAccountProfile(
+    accountId: string,
+    input: AccountProfileInput
+  ): Promise<Result<Account>> {
+    try {
+      const index = this.accounts.findIndex((a) => a.id === accountId);
+      if (index === -1) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+
+      const validated = validateAccountProfile(input);
+      if (!validated.ok) {
+        // 校验失败：不修改任何内存态，保持原值不变（需求 2.7-2.9 / Property 5）
+        return validated;
+      }
+
+      // 校验通过：仅更新目标账户资料，不触及其他账户（Property 4）
+      const updated: Account = {
+        id: this.accounts[index].id,
+        profile: { ...validated.data },
+      };
+      this.accounts[index] = updated;
+      return ok(this.cloneAccount(updated));
+    } catch (e) {
+      return fail("PROVIDER_ERROR", `更新账户资料失败：${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 删除指定账户并级联移除其名下 Device / 记录 / 策略 / 触发历史；
+   * 账户不存在返回 NOT_FOUND；仅剩 1 个账户返回 LAST_ACCOUNT 且不删除（需求 2.12 / Property 18）；
+   * 否则删除并返回剩余账户标识（支持删除 Current_Account 后前端自动切换，需求 2.11、2.13 / Property 20）。
+   */
+  async deleteAccount(
+    accountId: string
+  ): Promise<Result<{ id: string; remainingAccountIds: string[] }>> {
+    try {
+      const index = this.accounts.findIndex((a) => a.id === accountId);
+      if (index === -1) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+
+      // 至少需保留 1 个账户：仅剩 1 个时拒绝删除且不改动内存（需求 2.12 / Property 18）
+      if (this.accounts.length <= 1) {
+        return fail("LAST_ACCOUNT", "至少需保留 1 个账户");
+      }
+
+      // 移除账户并级联清理其作用域内存态（设备/记录/策略/历史/电价，需求 2.11 / Property 20）
+      this.accounts.splice(index, 1);
+      this.stateByAccount.delete(accountId);
+
+      const remainingAccountIds = this.accounts.map((a) => a.id);
+      return ok({ id: accountId, remainingAccountIds });
+    } catch (e) {
+      return fail("PROVIDER_ERROR", `删除账户失败：${(e as Error).message}`);
+    }
+  }
+
+  // ============================================================
+  // 设备方法（账户作用域，需求 1.1、1.2、1.3、1.8、6.5）
   // ============================================================
 
   /**
-   * 返回最多 200 台设备；connectionStatus 在读取时按 60 秒窗口即时派生（需求 1.1、1.2、1.3）。
+   * 返回指定账户名下最多 200 台设备；connectionStatus 在读取时按 60 秒窗口即时派生（需求 1.1、1.2、1.3）。
+   * 账户不存在返回 NOT_FOUND（需求 6.5）。
    */
-  async listDevices(): Promise<Result<Device[]>> {
+  async listDevices(accountId: string): Promise<Result<Device[]>> {
     try {
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
       const now = this.clock();
       // 防御性截断到 200 台，确保设备数量上限不变量（需求 1.1 / Property 1）
-      const list = this.devices.slice(0, MAX_DEVICES).map((device) => ({
+      const list = state.devices.slice(0, MAX_DEVICES).map((device) => ({
         id: device.id,
+        accountId: device.accountId,
         name: device.name,
         // 读取时即时派生连接状态，保证与「当前时间」一致（需求 1.3）
         connectionStatus: deriveConnectionStatus(device.lastReportedAt, now),
@@ -231,18 +400,26 @@ export class MockProvider implements IDataProvider {
   }
 
   /**
-   * 返回单台设备详情；不存在则返回 NOT_FOUND（需求 1.8）。
+   * 返回指定账户名下单台设备详情；账户或设备不存在则返回 NOT_FOUND（需求 1.8、6.5）。
    * lastStatusUpdatedAt 精确到秒。
    */
-  async getDevice(deviceId: string): Promise<Result<DeviceDetail>> {
+  async getDevice(
+    accountId: string,
+    deviceId: string
+  ): Promise<Result<DeviceDetail>> {
     try {
-      const device = this.devices.find((d) => d.id === deviceId);
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+      const device = state.devices.find((d) => d.id === deviceId);
       if (!device) {
         return fail("NOT_FOUND", `设备不存在：${deviceId}`);
       }
       const now = this.clock();
       const detail: DeviceDetail = {
         id: device.id,
+        accountId: device.accountId,
         name: device.name,
         connectionStatus: deriveConnectionStatus(device.lastReportedAt, now),
         lastReportedAt: device.lastReportedAt,
@@ -256,54 +433,28 @@ export class MockProvider implements IDataProvider {
   }
 
   // ============================================================
-  // 账户方法（任务 10.3，需求 2.1-2.5）
+  // 充放电方法（账户作用域，需求 3.1-3.5、3.7、6.5）
   // ============================================================
 
-  /** 获取当前账户资料（需求 2.1） */
-  async getAccountProfile(): Promise<Result<AccountProfile>> {
-    try {
-      // 返回内存态副本，避免外部直接持有内部引用
-      return ok({ ...this.account });
-    } catch (e) {
-      return fail("PROVIDER_ERROR", `获取账户资料失败：${(e as Error).message}`);
-    }
-  }
-
   /**
-   * 校验通过则持久化并返回最新资料；校验失败返回 VALIDATION 错误且不改动内存（需求 2.2-2.5）。
+   * 指定账户当日（00:00:00 至当前）总充/放电；deviceId 省略表示该账户全部设备汇总（需求 3.1、3.4）。
+   * 数值保留 2 位小数。账户不存在或指定的 deviceId 不存在时返回 NOT_FOUND。
    */
-  async updateAccountProfile(
-    input: AccountProfileInput
-  ): Promise<Result<AccountProfile>> {
+  async getTodaySummary(
+    accountId: string,
+    deviceId?: string
+  ): Promise<Result<DailySummary>> {
     try {
-      const validated = validateAccountProfile(input);
-      if (!validated.ok) {
-        // 校验失败：不修改任何内存态，直接返回 VALIDATION 错误（需求 2.3-2.5）
-        return validated;
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
       }
-      // 校验通过：写入内存态并返回最新值
-      this.account = { ...validated.data };
-      return ok({ ...this.account });
-    } catch (e) {
-      return fail("PROVIDER_ERROR", `更新账户资料失败：${(e as Error).message}`);
-    }
-  }
 
-  // ============================================================
-  // 充放电方法（任务 10.5，需求 3.1-3.5、3.7）
-  // ============================================================
-
-  /**
-   * 当日（00:00:00 至当前）总充/放电；deviceId 省略表示全部设备汇总（需求 3.1、3.4）。
-   * 数值保留 2 位小数。指定的 deviceId 不存在时返回 NOT_FOUND。
-   */
-  async getTodaySummary(deviceId?: string): Promise<Result<DailySummary>> {
-    try {
       const now = this.clock();
       const today = formatLocalDay(new Date(now));
 
-      // 选取参与汇总的记录集合
-      const recordSets = this.selectRecordSets(deviceId);
+      // 选取参与汇总的记录集合（限定在该账户作用域内）
+      const recordSets = this.selectRecordSets(state, deviceId);
       if (recordSets === null) {
         return fail("NOT_FOUND", `设备不存在：${deviceId}`);
       }
@@ -332,14 +483,22 @@ export class MockProvider implements IDataProvider {
   }
 
   /**
-   * 返回恰好 7 条、按日期升序、含当日在内向前回溯 7 个连续自然日、缺失日零填充的记录（需求 3.2、3.3、3.5）。
-   * deviceId 省略表示跨全部设备按日聚合。指定的 deviceId 不存在时返回 NOT_FOUND。
+   * 指定账户：返回恰好 7 条、按日期升序、含当日在内向前回溯 7 个连续自然日、缺失日零填充的记录
+   * （需求 3.2、3.3、3.5）。deviceId 省略表示跨该账户全部设备按日聚合。
+   * 账户不存在或指定的 deviceId 不存在时返回 NOT_FOUND。
+   * 返回的每条记录其 accountId 恒等于查询账户（保证账户数据隔离，Property 21）。
    */
   async getWeeklyRecords(
+    accountId: string,
     deviceId?: string
   ): Promise<Result<ChargeDischargeRecord[]>> {
     try {
-      const recordSets = this.selectRecordSets(deviceId);
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+
+      const recordSets = this.selectRecordSets(state, deviceId);
       if (recordSets === null) {
         return fail("NOT_FOUND", `设备不存在：${deviceId}`);
       }
@@ -355,9 +514,14 @@ export class MockProvider implements IDataProvider {
         }
       }
 
+      // 汇总场景以空字符串作为 deviceId 哨兵（表示「全部设备」），单设备场景沿用该设备 id
+      const scopeDeviceId = deviceId ?? "";
+
       const aggregatedRaw: ChargeDischargeRecord[] = Array.from(
         aggregatedByDate.entries()
       ).map(([date, sums]) => ({
+        accountId,
+        deviceId: scopeDeviceId,
         date,
         chargeKwh: clampKwh(sums.charge),
         dischargeKwh: clampKwh(sums.discharge),
@@ -366,31 +530,43 @@ export class MockProvider implements IDataProvider {
       // 即时派生 7 天零填充集合（需求 3.2、3.3、3.5）
       const today = new Date(this.clock());
       const weekly = buildWeeklyRecords(aggregatedRaw, today);
-      return ok(weekly);
+
+      // 统一改写归属：保证所有 7 条记录（含零填充日）的 accountId 恒为查询账户，
+      // 从而满足账户数据隔离不变量（Property 21、需求 6.5）。
+      const scoped = weekly.map((r) => ({
+        accountId,
+        deviceId: scopeDeviceId,
+        date: r.date,
+        chargeKwh: r.chargeKwh,
+        dischargeKwh: r.dischargeKwh,
+      }));
+      return ok(scoped);
     } catch (e) {
       return fail("PROVIDER_ERROR", `获取 7 天数据失败：${(e as Error).message}`);
     }
   }
 
   /**
-   * 选取参与充放电聚合的记录集合。
-   * - deviceId 省略：返回全部设备的记录集合（用于汇总）。
-   * - deviceId 指定且存在：返回仅含该设备记录的单元素集合。
-   * - deviceId 指定但不存在：返回 null（由调用方转换为 NOT_FOUND）。
+   * 在给定账户作用域内选取参与充放电聚合的记录集合。
+   * - deviceId 省略：返回该账户全部设备的记录集合（用于汇总）。
+   * - deviceId 指定且属于该账户：返回仅含该设备记录的单元素集合。
+   * - deviceId 指定但不属于该账户：返回 null（由调用方转换为 NOT_FOUND）。
    *
+   * @param state 账户作用域内存态
    * @param deviceId 可选设备标识
    * @returns 记录集合数组；设备不存在时返回 null
    */
   private selectRecordSets(
+    state: AccountState,
     deviceId?: string
   ): ChargeDischargeRecord[][] | null {
     if (deviceId === undefined) {
-      return Object.values(this.recordsByDevice);
+      return Object.values(state.recordsByDevice);
     }
-    const records = this.recordsByDevice[deviceId];
+    const records = state.recordsByDevice[deviceId];
     // 设备本身存在但无记录时，视为存在并返回空记录集合
     const deviceExists =
-      records !== undefined || this.devices.some((d) => d.id === deviceId);
+      records !== undefined || state.devices.some((d) => d.id === deviceId);
     if (!deviceExists) {
       return null;
     }
@@ -398,38 +574,51 @@ export class MockProvider implements IDataProvider {
   }
 
   // ============================================================
-  // 电力交易方法与触发引擎（任务 10.8，需求 4.1-4.3、4.6、4.7、4.10、4.11）
+  // 电力交易方法与触发引擎（账户作用域，需求 4.1-4.3、4.6、4.7、4.10、4.11、6.5）
   // ============================================================
 
-  /** 返回全部交易策略列表（需求 4.1、4.2） */
-  async listStrategies(): Promise<Result<TradingStrategy[]>> {
+  /** 返回指定账户名下全部交易策略列表（需求 4.1、4.2）；账户不存在返回 NOT_FOUND */
+  async listStrategies(accountId: string): Promise<Result<TradingStrategy[]>> {
     try {
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
       // 返回深拷贝，避免外部修改内部状态
-      return ok(this.strategies.map((s) => this.cloneStrategy(s)));
+      return ok(state.strategies.map((s) => this.cloneStrategy(s)));
     } catch (e) {
       return fail("PROVIDER_ERROR", `获取策略列表失败：${(e as Error).message}`);
     }
   }
 
   /**
-   * 校验通过则创建策略并返回；校验失败返回 VALIDATION 错误且不新增任何记录（需求 4.3、4.8、4.9）。
+   * 在指定账户下创建策略：校验通过则创建并返回（归属该账户）；
+   * 账户不存在返回 NOT_FOUND；校验失败返回 VALIDATION 且不新增任何记录（需求 4.3、4.8、4.9 / Property 10）。
    */
   async createStrategy(
+    accountId: string,
     input: TradingStrategyInput
   ): Promise<Result<TradingStrategy>> {
     try {
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+
       const validated = validateTradingStrategyInput(input);
       if (!validated.ok) {
         // 校验失败：不持久化任何数据（需求 4.8、4.9 / Property 10）
         return { ok: false, error: validated.error };
       }
 
-      // 生成唯一 id（自增序列，避免与已有/已删除 id 冲突）
+      // 生成全局唯一 id（自增序列，避免与已有/已删除 id 冲突）
       this.strategySeq += 1;
       const id = `strategy-${String(this.strategySeq).padStart(3, "0")}`;
 
       const strategy: TradingStrategy = {
         id,
+        // 归属当前账户（需求 4.3、6.4 / Property 9）
+        accountId,
         name: validated.data.name,
         action: validated.data.action,
         condition: {
@@ -440,7 +629,7 @@ export class MockProvider implements IDataProvider {
         // 去抖状态初始未触发（需求 4.10）
         triggered: false,
       };
-      this.strategies.push(strategy);
+      state.strategies.push(strategy);
       return ok(this.cloneStrategy(strategy));
     } catch (e) {
       return fail("PROVIDER_ERROR", `创建策略失败：${(e as Error).message}`);
@@ -448,19 +637,26 @@ export class MockProvider implements IDataProvider {
   }
 
   /**
-   * 部分更新指定策略；不存在返回 NOT_FOUND，校验失败返回 VALIDATION 错误且不改动内存（需求 4.6）。
+   * 部分更新指定账户名下策略；账户或策略不存在返回 NOT_FOUND，
+   * 校验失败返回 VALIDATION 且不改动内存（需求 4.6）。
    */
   async updateStrategy(
+    accountId: string,
     id: string,
     patch: TradingStrategyPatch
   ): Promise<Result<TradingStrategy>> {
     try {
-      const index = this.strategies.findIndex((s) => s.id === id);
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+
+      const index = state.strategies.findIndex((s) => s.id === id);
       if (index === -1) {
         return fail("NOT_FOUND", `策略不存在：${id}`);
       }
 
-      const existing = this.strategies[index];
+      const existing = state.strategies[index];
 
       // 计算合并后的字段值（patch 未提供的字段沿用原值）
       const nextName = patch.name !== undefined ? patch.name : existing.name;
@@ -494,6 +690,7 @@ export class MockProvider implements IDataProvider {
 
       const updated: TradingStrategy = {
         id: existing.id,
+        accountId: existing.accountId,
         name: nextName,
         action: nextAction,
         condition: {
@@ -503,21 +700,28 @@ export class MockProvider implements IDataProvider {
         enabled: nextEnabled,
         triggered: nextTriggered,
       };
-      this.strategies[index] = updated;
+      state.strategies[index] = updated;
       return ok(this.cloneStrategy(updated));
     } catch (e) {
       return fail("PROVIDER_ERROR", `更新策略失败：${(e as Error).message}`);
     }
   }
 
-  /** 删除指定策略并返回其 id；不存在返回 NOT_FOUND（需求 4.7） */
-  async deleteStrategy(id: string): Promise<Result<{ id: string }>> {
+  /** 删除指定账户名下策略并返回其 id；账户或策略不存在返回 NOT_FOUND（需求 4.7） */
+  async deleteStrategy(
+    accountId: string,
+    id: string
+  ): Promise<Result<{ id: string }>> {
     try {
-      const index = this.strategies.findIndex((s) => s.id === id);
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+      const index = state.strategies.findIndex((s) => s.id === id);
       if (index === -1) {
         return fail("NOT_FOUND", `策略不存在：${id}`);
       }
-      this.strategies.splice(index, 1);
+      state.strategies.splice(index, 1);
       return ok({ id });
     } catch (e) {
       return fail("PROVIDER_ERROR", `删除策略失败：${(e as Error).message}`);
@@ -525,41 +729,48 @@ export class MockProvider implements IDataProvider {
   }
 
   /**
-   * 返回当前电价与触发动作历史（倒序，最多 50 条，需求 4.11）。
-   * 每次调用先演化电价，再运行触发引擎评估全部启用策略。
+   * 返回指定账户当前电价与触发动作历史（倒序，最多 50 条，需求 4.11）。
+   * 每次调用先演化该账户电价，再运行触发引擎评估该账户全部启用策略。
+   * 账户不存在返回 NOT_FOUND。
    */
-  async getMarketState(): Promise<Result<MarketState>> {
+  async getMarketState(accountId: string): Promise<Result<MarketState>> {
     try {
+      const state = this.stateByAccount.get(accountId);
+      if (!state) {
+        return fail("NOT_FOUND", `账户不存在：${accountId}`);
+      }
+
       // 演化电价：模拟市场电价随时间波动，使触发条件可被反复进入/退出
-      this.currentPrice = roundTo2(this.priceRng.floatInRange(0, PRICE_MAX));
+      state.currentPrice = roundTo2(this.priceRng.floatInRange(0, PRICE_MAX));
 
-      // 运行触发引擎，按去抖语义记录动作
-      this.runTriggerEngine(this.currentPrice);
+      // 运行触发引擎，按去抖语义记录动作（限定在该账户作用域）
+      this.runTriggerEngine(state, state.currentPrice);
 
-      const state: MarketState = {
-        currentPrice: this.currentPrice,
+      const marketState: MarketState = {
+        currentPrice: state.currentPrice,
         // 返回历史副本（已为最新在前、且截断至 50 条）
-        history: this.history.slice(0, MAX_HISTORY).map((r) => ({ ...r })),
+        history: state.history.slice(0, MAX_HISTORY).map((r) => ({ ...r })),
       };
-      return ok(state);
+      return ok(marketState);
     } catch (e) {
       return fail("PROVIDER_ERROR", `获取市场状态失败：${(e as Error).message}`);
     }
   }
 
   /**
-   * 触发引擎：对每条启用策略调用 evaluateTrigger，按去抖语义记录动作。
+   * 触发引擎：对指定账户的每条启用策略调用 evaluateTrigger，按去抖语义记录动作。
    *
    * 去抖语义（需求 4.10 / Property 13）：条件满足且此前未触发 -> 记录一次并置 triggered=true；
    * 条件持续满足 -> 不重复记录；条件不再满足 -> 重置 triggered=false。
-   * 新动作以「最新在前」写入历史并截断至最近 50 条（需求 4.11 / Property 14）。
+   * 新动作以「最新在前」写入该账户历史并截断至最近 50 条（需求 4.11 / Property 14）。
    *
+   * @param state 账户作用域内存态
    * @param price 当前电价
    */
-  private runTriggerEngine(price: number): void {
+  private runTriggerEngine(state: AccountState, price: number): void {
     const triggeredAt = new Date(this.clock()).toISOString();
 
-    for (const strategy of this.strategies) {
+    for (const strategy of state.strategies) {
       // 停用的策略不参与评估，但其去抖状态保持不变
       if (!strategy.enabled) {
         continue;
@@ -581,20 +792,34 @@ export class MockProvider implements IDataProvider {
           triggeredAt,
         };
         // 最新动作置于队首，保证倒序（需求 4.11）
-        this.history.unshift(record);
+        state.history.unshift(record);
       }
     }
 
     // 截断历史至最近 50 条（需求 4.11 / Property 14）
-    if (this.history.length > MAX_HISTORY) {
-      this.history.length = MAX_HISTORY;
+    if (state.history.length > MAX_HISTORY) {
+      state.history.length = MAX_HISTORY;
     }
+  }
+
+  /** 深拷贝账户对象，避免外部持有内部引用 */
+  private cloneAccount(a: Account): Account {
+    return {
+      id: a.id,
+      profile: {
+        name: a.profile.name,
+        email: a.profile.email,
+        phone: a.profile.phone,
+        address: a.profile.address,
+      },
+    };
   }
 
   /** 深拷贝策略对象，避免外部持有内部引用 */
   private cloneStrategy(s: TradingStrategy): TradingStrategy {
     return {
       id: s.id,
+      accountId: s.accountId,
       name: s.name,
       action: s.action,
       condition: {

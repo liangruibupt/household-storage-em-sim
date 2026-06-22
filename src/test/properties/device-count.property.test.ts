@@ -27,8 +27,12 @@ const DEVICE_LIMIT = 200;
 const FIXED_NOW = 1_700_000_000_000; // 2023-11-14T22:13:20Z 附近的固定时刻
 const fixedClock = () => FIXED_NOW;
 
+// 种子数据默认账户标识（seed-data 以 account-001 起始编号），作为账户作用域查询入参。
+const FIRST_ACCOUNT_ID = "account-001";
+
 /**
- * 断言给定 deviceCount 与 seed 构造的 MockProvider，其 listDevices 成功返回且长度 ≤ 200。
+ * 断言给定 deviceCount 与 seed 构造的 MockProvider，其 listDevices(accountId)
+ * 成功返回且长度 ≤ 200（账户作用域，需求 1.1、6.5 / Property 1）。
  *
  * @param deviceCount 期望设备数量（可超过上限以验证钳制）
  * @param seed 固定种子，保证可复现
@@ -39,7 +43,8 @@ async function listDevicesLengthWithinLimit(
   seed: number
 ): Promise<boolean> {
   const provider = new MockProvider({ seed, clock: fixedClock, deviceCount });
-  const result = await provider.listDevices();
+  // 账户作用域查询：以默认账户 account-001 为作用域
+  const result = await provider.listDevices(FIRST_ACCOUNT_ID);
 
   // 必须为成功结果（需求 1.1 正常路径）
   if (!result.ok) return false;
@@ -90,7 +95,7 @@ describe("Property 1: 设备数量上限不变量", () => {
   it("固定示例：seed=0 时 0 → 0 条、200 → 200 条、>200 → 恰好钳制为 200 条", async () => {
     // 种子规模 0：无设备
     const empty = new MockProvider({ seed: 0, clock: fixedClock, deviceCount: 0 });
-    const emptyResult = await empty.listDevices();
+    const emptyResult = await empty.listDevices(FIRST_ACCOUNT_ID);
     expect(emptyResult.ok).toBe(true);
     if (emptyResult.ok) {
       expect(emptyResult.data.length).toBe(0);
@@ -98,7 +103,7 @@ describe("Property 1: 设备数量上限不变量", () => {
 
     // 种子规模 200：恰好达到上限
     const full = new MockProvider({ seed: 0, clock: fixedClock, deviceCount: DEVICE_LIMIT });
-    const fullResult = await full.listDevices();
+    const fullResult = await full.listDevices(FIRST_ACCOUNT_ID);
     expect(fullResult.ok).toBe(true);
     if (fullResult.ok) {
       expect(fullResult.data.length).toBe(DEVICE_LIMIT);
@@ -106,7 +111,7 @@ describe("Property 1: 设备数量上限不变量", () => {
 
     // 种子规模 >200：钳制为 200，不超过上限
     const over = new MockProvider({ seed: 0, clock: fixedClock, deviceCount: DEVICE_LIMIT + 500 });
-    const overResult = await over.listDevices();
+    const overResult = await over.listDevices(FIRST_ACCOUNT_ID);
     expect(overResult.ok).toBe(true);
     if (overResult.ok) {
       expect(overResult.data.length).toBe(DEVICE_LIMIT);

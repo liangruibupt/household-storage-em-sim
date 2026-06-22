@@ -75,6 +75,10 @@ function buildRaw(
   entries: { offset: number; chargeKwh: number; dischargeKwh: number }[]
 ): ChargeDischargeRecord[] {
   return entries.map((e) => ({
+    // 多账户模型下记录携带归属字段；buildWeeklyRecords 仅依赖 date/charge/discharge，
+    // 此处填入固定归属以满足类型契约（需求 6.4）。
+    accountId: "account-001",
+    deviceId: "device-001",
     date: dayKeyFromOffset(today, e.offset),
     chargeKwh: e.chargeKwh,
     dischargeKwh: e.dischargeKwh,
@@ -168,6 +172,8 @@ describe("Property 7: 7 天数据集合不变量（含零填充）", () => {
       fc.property(fullArb, ({ today, values }) => {
         // values[0] 对应最早一天（offset 6），values[6] 对应当日（offset 0）
         const raw: ChargeDischargeRecord[] = values.map((v, idx) => ({
+          accountId: "account-001",
+          deviceId: "device-001",
           date: dayKeyFromOffset(today, 6 - idx),
           chargeKwh: v.chargeKwh,
           dischargeKwh: v.dischargeKwh,

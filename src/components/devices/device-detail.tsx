@@ -19,6 +19,11 @@ import StatusBadge from "./status-badge";
 export interface DeviceDetailProps {
   /** 待展示详情的设备 id */
   deviceId: string;
+  /**
+   * 账户作用域标识（Current_Account）。详情请求据此附加 ?accountId=...，
+   * 仅读取属于该账户的设备详情（需求 6.5）。由父页面从 AccountContext 透传。
+   */
+  accountId?: string;
 }
 
 /**
@@ -53,11 +58,12 @@ function formatToSecond(iso: string): string {
  *
  * 参数:
  *   deviceId (string): 设备唯一标识
+ *   accountId (string | undefined): 账户作用域标识（需求 6.5）
  *
  * 返回:
  *   JSX.Element: 设备详情视图（含加载、错误保留与重试）。
  */
-export default function DeviceDetail({ deviceId }: DeviceDetailProps): JSX.Element {
+export default function DeviceDetail({ deviceId, accountId }: DeviceDetailProps): JSX.Element {
   // 上一次成功的详情数据；失败时保留不清空
   const [detail, setDetail] = useState<DeviceDetailModel | null>(null);
   // 加载态
@@ -74,9 +80,10 @@ export default function DeviceDetail({ deviceId }: DeviceDetailProps): JSX.Eleme
     setLoading(true);
     setError(null);
 
-    // 经 HTTP 客户端封装访问详情端点（路径参数需编码）
+    // 经 HTTP 客户端封装访问详情端点（路径参数需编码），携带 accountId 限定作用域（需求 6.5）
     const result = await getJson<DeviceDetailModel>(
-      `/api/devices/${encodeURIComponent(deviceId)}`
+      `/api/devices/${encodeURIComponent(deviceId)}`,
+      { accountId }
     );
 
     // 已有更新请求发起则丢弃本次陈旧结果
@@ -93,7 +100,7 @@ export default function DeviceDetail({ deviceId }: DeviceDetailProps): JSX.Eleme
       setError(result.error);
     }
     setLoading(false);
-  }, [deviceId]);
+  }, [deviceId, accountId]);
 
   // 设备 id 变化时重新拉取详情
   useEffect(() => {

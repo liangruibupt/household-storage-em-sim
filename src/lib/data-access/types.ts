@@ -1,6 +1,7 @@
 // 领域类型与统一返回类型定义
 // 本文件为数据访问层（DataAccessLayer）的核心契约来源，所有方法均围绕这些类型定义。
-// 对应需求：1.2、2.1、3.3、4.4、4.5、5.5
+// 平台为多账户模型（≤5），Device/ChargeDischargeRecord/TradingStrategy 均按 accountId 归属。
+// 对应需求：1.2、2.4、2.5、2.11、2.12、3.3、4.4、4.5、5.5、6.4
 
 // ============================================================
 // 统一返回类型与结构化错误（需求 5.5、5.6）
@@ -8,8 +9,10 @@
 
 /** 结构化错误类型标识（需求 5.6） */
 export type DataErrorType =
-  | "NOT_FOUND" // 请求的数据不存在
-  | "VALIDATION" // 输入校验失败（需求 2.3-2.5、4.8、4.9）
+  | "NOT_FOUND" // 请求的数据不存在（含 accountId 不存在）
+  | "VALIDATION" // 输入校验失败（需求 2.7-2.9、4.8、4.9）
+  | "ACCOUNT_LIMIT" // 账户数量已达上限 5 个，拒绝创建（需求 2.5、6.4）
+  | "LAST_ACCOUNT" // 仅剩 1 个账户，拒绝删除（需求 2.12）
   | "PROVIDER_ERROR" // 数据来源内部错误
   | "TIMEOUT"; // 超时
 
@@ -39,6 +42,8 @@ export type ConnectionStatus = "online" | "offline";
 export interface Device {
   /** 唯一标识 */
   id: string;
+  /** 归属账户（需求 6.4） */
+  accountId: string;
   /** 设备名称 */
   name: string;
   /** 连接状态，由 60 秒窗口派生计算（需求 1.3） */
@@ -59,18 +64,26 @@ export interface DeviceDetail extends Device {
 
 /** 账户信息：用户的账户资料 */
 export interface AccountProfile {
-  /** 姓名，1-50 字符（需求 2.4） */
+  /** 姓名，1-50 字符（需求 2.8） */
   name: string;
-  /** 邮箱，标准格式且 ≤254 字符（需求 2.3） */
+  /** 邮箱，标准格式且 ≤254 字符（需求 2.7） */
   email: string;
-  /** 电话，5-20 字符且仅含 [0-9 + - 空格]（需求 2.5） */
+  /** 电话，5-20 字符且仅含 [0-9 + - 空格]（需求 2.9） */
   phone: string;
-  /** 地址，≤200 字符（需求 2.5） */
+  /** 地址，≤200 字符（需求 2.9） */
   address: string;
 }
 
-/** 账户更新输入：字段结构与 AccountProfile 一致，校验由服务端统一执行 */
+/** 账户创建/更新输入：字段结构与 AccountProfile 一致，校验由服务端统一执行 */
 export type AccountProfileInput = AccountProfile;
+
+/** 账户实体：唯一标识 + 账户资料；Device/记录/策略均按 id 归属（需求 6.4） */
+export interface Account {
+  /** 唯一标识 */
+  id: string;
+  /** 账户资料 */
+  profile: AccountProfile;
+}
 
 // ============================================================
 // 充放电类型（需求 3）
@@ -78,6 +91,10 @@ export type AccountProfileInput = AccountProfile;
 
 /** 单条自然日充放电记录；charge/discharge 非负且 ≤ 999,999,999.99（需求 3.7） */
 export interface ChargeDischargeRecord {
+  /** 归属账户（需求 6.4） */
+  accountId: string;
+  /** 归属设备（随设备归属该账户） */
+  deviceId: string;
   /** 自然日，格式 YYYY-MM-DD */
   date: string;
   /** 充电量（kWh），≥ 0 */
@@ -123,6 +140,8 @@ export interface TriggerCondition {
 export interface TradingStrategy {
   /** 唯一标识 */
   id: string;
+  /** 归属账户（需求 4.3、6.4） */
+  accountId: string;
   /** 策略名称，1-100 字符（需求 4.8） */
   name: string;
   /** 触发后执行的动作 */
@@ -135,10 +154,19 @@ export interface TradingStrategy {
   triggered: boolean;
 }
 
-/** 策略创建输入：排除由系统生成的 id 与去抖状态 triggered */
-export type TradingStrategyInput = Omit<TradingStrategy, "id" | "triggered">;
+/**
+ * 策略创建输入：排除系统生成的 id、去抖状态 triggered，以及归属字段 accountId；
+ * accountId 由作用域参数（createStrategy 的 accountId）提供，而非输入体携带
+ */
+export type TradingStrategyInput = Omit<
+  TradingStrategy,
+  "id" | "accountId" | "triggered"
+>;
 
-/** 策略更新补丁：可部分更新名称、动作、触发条件与启用状态 */
+/**
+ * 策略更新补丁：仅可部分更新名称、动作、触发条件与启用状态；
+ * 不含 accountId（归属不可经更新体变更，作用域由 accountId 参数提供）
+ */
 export type TradingStrategyPatch = Partial<
   Pick<TradingStrategy, "name" | "action" | "condition" | "enabled">
 >;

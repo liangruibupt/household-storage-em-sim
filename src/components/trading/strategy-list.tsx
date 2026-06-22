@@ -20,6 +20,11 @@ export interface StrategyListProps {
   onChanged?: () => void;
   /** 启停/删除失败后的回调，携带中文错误提示 */
   onError?: (message: string) => void;
+  /**
+   * 账户作用域标识（Current_Account）。透传给启停/删除子组件，
+   * 使写操作限定在该账户名下策略（需求 6.5）。
+   */
+  accountId?: string;
 }
 
 /**
@@ -29,6 +34,7 @@ export interface StrategyListProps {
  *   strategies (TradingStrategy[]): 策略集合
  *   onChanged (() => void | undefined): 变更成功回调
  *   onError ((message: string) => void | undefined): 变更失败回调
+ *   accountId (string | undefined): 账户作用域标识（需求 6.5）
  *
  * 返回:
  *   JSX.Element: 策略列表或「暂无策略」空状态。
@@ -37,6 +43,7 @@ export default function StrategyList({
   strategies,
   onChanged,
   onError,
+  accountId,
 }: StrategyListProps): JSX.Element {
   // 空列表：显示空状态而非错误（需求 4.2）
   if (strategies.length === 0) {
@@ -74,17 +81,19 @@ export default function StrategyList({
             </span>
           </div>
 
-          {/* 操作区：启停切换与删除（需求 4.6、4.7） */}
+          {/* 操作区：启停切换与删除（需求 4.6、4.7）；透传 accountId 限定作用域（需求 6.5） */}
           <div className="strategy-item__actions">
             <StrategyToggle
               strategy={strategy}
               onToggled={onChanged}
               onError={onError}
+              accountId={accountId}
             />
             <DeleteStrategy
               strategy={strategy}
               onDeleted={onChanged}
               onError={onError}
+              accountId={accountId}
             />
           </div>
         </li>

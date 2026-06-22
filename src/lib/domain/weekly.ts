@@ -59,6 +59,14 @@ export function buildWeeklyRecords(
     }
   }
 
+  // 为零填充日推导归属作用域（accountId / deviceId）：
+  // 多账户模型下 ChargeDischargeRecord 必须携带归属字段，缺失日同样需要补齐。
+  // 这里取原始记录中首条的归属作为模板；当原始集合为空时回退为空字符串占位，
+  // 由调用方（账户作用域的 Provider）在读取后统一改写为查询账户标识，
+  // 从而保证函数签名不变且输出恒满足 ChargeDischargeRecord 结构契约。
+  const scopeAccountId = raw.length > 0 ? raw[0].accountId : "";
+  const scopeDeviceId = raw.length > 0 ? raw[0].deviceId : "";
+
   const result: ChargeDischargeRecord[] = [];
 
   // 从 6 天前回溯到当日（offset 由大到小），天然得到按日期升序的 7 条记录；
@@ -74,15 +82,20 @@ export function buildWeeklyRecords(
 
     const matched = rawByDate.get(dateKey);
     if (matched) {
-      // 命中原始数据：仅取契约所定义的三个字段，规避可能携带的额外属性
+      // 命中原始数据：仅取契约所定义的字段，规避可能携带的额外属性，
+      // 并保留其归属（accountId / deviceId）
       result.push({
+        accountId: matched.accountId,
+        deviceId: matched.deviceId,
         date: dateKey,
         chargeKwh: matched.chargeKwh,
         dischargeKwh: matched.dischargeKwh,
       });
     } else {
-      // 缺失自然日：充/放电量零填充为 0（需求 3.5）
+      // 缺失自然日：充/放电量零填充为 0（需求 3.5），归属沿用推导出的作用域模板
       result.push({
+        accountId: scopeAccountId,
+        deviceId: scopeDeviceId,
         date: dateKey,
         chargeKwh: 0,
         dischargeKwh: 0,

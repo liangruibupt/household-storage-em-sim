@@ -27,6 +27,11 @@ import {
 export interface StrategyFormProps {
   /** 创建成功后的回调（通常触发列表与市场状态刷新） */
   onCreated?: () => void;
+  /**
+   * 账户作用域标识（Current_Account）。创建请求据此附加 ?accountId=...，
+   * 使新策略归属于该账户（需求 6.5）。由父页面从 AccountContext 透传。
+   */
+  accountId?: string;
 }
 
 /** 字段级错误映射：键为字段名（与服务端 error.field 对齐），值为中文提示 */
@@ -40,6 +45,7 @@ type FieldErrors = Partial<Record<string, string>>;
  */
 export default function StrategyForm({
   onCreated,
+  accountId,
 }: StrategyFormProps): JSX.Element {
   // —— 受控表单字段 ——
   const [name, setName] = useState("");
@@ -89,7 +95,9 @@ export default function StrategyForm({
     const result = await sendJson<TradingStrategy>(
       "/api/trading/strategies",
       "POST",
-      input
+      input,
+      // 携带 accountId，使新策略归属 Current_Account（需求 6.5）
+      { accountId }
     );
     setSubmitting(false);
 

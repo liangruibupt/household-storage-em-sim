@@ -29,6 +29,19 @@ vi.mock("@/lib/http/client", () => ({
   getJson: vi.fn(),
 }));
 
+// EnergyPage 消费 AccountContext 读取 currentAccountId。mock useAccount 返回固定
+// Current_Account，使页面在无 Provider 的单元测试中确定性发起 account-001 作用域请求。
+vi.mock("@/components/account/account-context", () => ({
+  useAccount: () => ({
+    accounts: [],
+    currentAccountId: "account-001",
+    loading: false,
+    error: null,
+    setCurrentAccount: vi.fn(),
+    refreshAccounts: vi.fn(),
+  }),
+}));
+
 // mock recharts：将 BarChart 的 data 渲染为可断言的列表项，其余子组件渲染为 null。
 // 工厂内通过动态 import 获取 React，避免引用测试文件顶层变量（vi.mock 会被提升）。
 vi.mock("recharts", async () => {
@@ -91,16 +104,30 @@ function fail<T>(message: string): Result<T> {
   return { ok: false, error: { type: "PROVIDER_ERROR", message } };
 }
 
+/**
+ * 构造一条充放电记录夹具（多账户模型下携带归属字段 accountId / deviceId，需求 6.4）。
+ * 组件仅消费 date/charge/discharge，归属字段取固定值以满足类型契约。
+ */
+function rec(
+  date: string,
+  chargeKwh: number,
+  dischargeKwh: number
+): ChargeDischargeRecord {
+  return { accountId: "account-001", deviceId: "dev-1", date, chargeKwh, dischargeKwh };
+}
+
 /** 两台设备的固定夹具（用于触发范围切换器显示） */
 const twoDevices: Device[] = [
   {
     id: "dev-1",
+    accountId: "account-001",
     name: "客厅储能",
     connectionStatus: "online",
     lastReportedAt: "2024-03-07T10:00:00.000Z",
   },
   {
     id: "dev-2",
+    accountId: "account-001",
     name: "车库储能",
     connectionStatus: "offline",
     lastReportedAt: "2024-03-07T09:00:00.000Z",
@@ -197,13 +224,13 @@ describe("EnergyPage 7 天充放电图（需求 3.2、3.5）", () => {
   it("按日期升序渲染 7 天数据，且包含零填充日（值为 0）", async () => {
     // 故意乱序提供，且包含 charge/discharge 均为 0 的零填充日（03-03）
     const weekly: ChargeDischargeRecord[] = [
-      { date: "2024-03-05", chargeKwh: 5, dischargeKwh: 2 },
-      { date: "2024-03-01", chargeKwh: 1, dischargeKwh: 1 },
-      { date: "2024-03-03", chargeKwh: 0, dischargeKwh: 0 },
-      { date: "2024-03-02", chargeKwh: 2, dischargeKwh: 1 },
-      { date: "2024-03-07", chargeKwh: 7, dischargeKwh: 3 },
-      { date: "2024-03-04", chargeKwh: 4, dischargeKwh: 2 },
-      { date: "2024-03-06", chargeKwh: 6, dischargeKwh: 3 },
+      rec("2024-03-05", 5, 2),
+      rec("2024-03-01", 1, 1),
+      rec("2024-03-03", 0, 0),
+      rec("2024-03-02", 2, 1),
+      rec("2024-03-07", 7, 3),
+      rec("2024-03-04", 4, 2),
+      rec("2024-03-06", 6, 3),
     ];
     setupRoutes({
       devices: () => ok(oneDevice),
@@ -252,7 +279,7 @@ describe("EnergyPage 设备范围切换（需求 3.4）", () => {
       devices: () => ok(oneDevice),
       summary: () =>
         ok({ date: "2024-03-07", totalChargeKwh: 1, totalDischargeKwh: 1 }),
-      weekly: () => ok([{ date: "2024-03-07", chargeKwh: 1, dischargeKwh: 1 }]),
+      weekly: () => ok([rec("2024-03-07", 1, 1)]),
     });
 
     render(<EnergyPage />);
@@ -271,7 +298,7 @@ describe("EnergyPage 设备范围切换（需求 3.4）", () => {
       devices: () => ok(twoDevices),
       summary: () =>
         ok({ date: "2024-03-07", totalChargeKwh: 10, totalDischargeKwh: 5 }),
-      weekly: () => ok([{ date: "2024-03-07", chargeKwh: 1, dischargeKwh: 1 }]),
+      weekly: () => ok([rec("2024-03-07", 1, 1)]),
     });
 
     render(<EnergyPage />);
@@ -319,7 +346,7 @@ describe("EnergyPage 失败保留内容与重试（需求 3.6）", () => {
       devices: () => ok(twoDevices),
       summary: () =>
         ok({ date: "2024-03-07", totalChargeKwh: 12.5, totalDischargeKwh: 3 }),
-      weekly: () => ok([{ date: "2024-03-07", chargeKwh: 1, dischargeKwh: 1 }]),
+      weekly: () => ok([rec("2024-03-07", 1, 1)]),
     });
 
     const { container } = render(<EnergyPage />);
@@ -336,7 +363,7 @@ describe("EnergyPage 失败保留内容与重试（需求 3.6）", () => {
     setupRoutes({
       devices: () => ok(twoDevices),
       summary: () => fail("服务暂时不可用"),
-      weekly: () => ok([{ date: "2024-03-07", chargeKwh: 1, dischargeKwh: 1 }]),
+      weekly: () => ok([rec("2024-03-07", 1, 1)]),
     });
 
     // 通过范围切换触发一次重新请求 → summary 失败
@@ -359,7 +386,7 @@ describe("EnergyPage 失败保留内容与重试（需求 3.6）", () => {
       devices: () => ok(twoDevices),
       summary: () =>
         ok({ date: "2024-03-07", totalChargeKwh: 99, totalDischargeKwh: 4 }),
-      weekly: () => ok([{ date: "2024-03-07", chargeKwh: 2, dischargeKwh: 2 }]),
+      weekly: () => ok([rec("2024-03-07", 2, 2)]),
     });
 
     // 点击错误态中的「重试」按钮

@@ -28,11 +28,17 @@ import type {
   Result,
   TradingStrategyInput,
 } from "@/lib/data-access/types";
-import { invalidAccountProfile } from "@/test/arbitraries/account";
+import {
+  invalidAccountProfile,
+  validAccountProfile,
+} from "@/test/arbitraries/account";
 
 // 固定 seed 与固定时钟，保证每个 MockProvider 实例的初始数据确定可复现。
 const FIXED_SEED = 0x16e7;
 const FIXED_NOW = Date.parse("2024-06-15T12:00:00.000Z");
+
+// 账户作用域入参：seed-data 默认账户以 account-001 起始编号。
+const ACCOUNT_ID = "account-001";
 
 /** 构造一个隔离的、确定性的 MockProvider 实例。 */
 function freshProvider(): MockProvider {
@@ -43,6 +49,8 @@ function freshProvider(): MockProvider {
 const VALID_ERROR_TYPES: ReadonlySet<DataErrorType> = new Set<DataErrorType>([
   "NOT_FOUND",
   "VALIDATION",
+  "ACCOUNT_LIMIT",
+  "LAST_ACCOUNT",
   "PROVIDER_ERROR",
   "TIMEOUT",
 ]);
@@ -155,7 +163,7 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
     await fc.assert(
       fc.asyncProperty(unknownId, async (id) => {
         const provider = freshProvider();
-        const result = await provider.getDevice(id);
+        const result = await provider.getDevice(ACCOUNT_ID, id);
         expectStructuredError(result, "NOT_FOUND");
       }),
       FC_PARAMS
@@ -166,7 +174,7 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
     await fc.assert(
       fc.asyncProperty(unknownId, async (id) => {
         const provider = freshProvider();
-        const result = await provider.getTodaySummary(id);
+        const result = await provider.getTodaySummary(ACCOUNT_ID, id);
         expectStructuredError(result, "NOT_FOUND");
       }),
       FC_PARAMS
@@ -177,7 +185,7 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
     await fc.assert(
       fc.asyncProperty(unknownId, async (id) => {
         const provider = freshProvider();
-        const result = await provider.getWeeklyRecords(id);
+        const result = await provider.getWeeklyRecords(ACCOUNT_ID, id);
         expectStructuredError(result, "NOT_FOUND");
       }),
       FC_PARAMS
@@ -189,7 +197,7 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
       fc.asyncProperty(unknownId, async (id) => {
         const provider = freshProvider();
         // 即便携带合法补丁，目标不存在仍应为 NOT_FOUND（而非 VALIDATION）
-        const result = await provider.updateStrategy(id, { enabled: true });
+        const result = await provider.updateStrategy(ACCOUNT_ID, id, { enabled: true });
         expectStructuredError(result, "NOT_FOUND");
       }),
       FC_PARAMS
@@ -200,7 +208,7 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
     await fc.assert(
       fc.asyncProperty(unknownId, async (id) => {
         const provider = freshProvider();
-        const result = await provider.deleteStrategy(id);
+        const result = await provider.deleteStrategy(ACCOUNT_ID, id);
         expectStructuredError(result, "NOT_FOUND");
       }),
       FC_PARAMS
@@ -215,7 +223,7 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
     await fc.assert(
       fc.asyncProperty(invalidAccountProfile, async ({ input }) => {
         const provider = freshProvider();
-        const result = await provider.updateAccountProfile(input);
+        const result = await provider.updateAccountProfile(ACCOUNT_ID, input);
         expectStructuredError(result, "VALIDATION");
       }),
       FC_PARAMS
@@ -226,8 +234,44 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
     await fc.assert(
       fc.asyncProperty(invalidStrategyInput, async (input) => {
         const provider = freshProvider();
-        const result = await provider.createStrategy(input);
+        const result = await provider.createStrategy(ACCOUNT_ID, input);
         expectStructuredError(result, "VALIDATION");
+      }),
+      FC_PARAMS
+    );
+  });
+
+  // ----------------------------------------------------------
+  // ACCOUNT_LIMIT / LAST_ACCOUNT 分支：账户上限与唯一账户保护
+  // ----------------------------------------------------------
+
+  it("Feature: energy-storage-management, Property 16 — createAccount(账户数已达 5) 返回 ACCOUNT_LIMIT 且无数据", async () => {
+    await fc.assert(
+      fc.asyncProperty(validAccountProfile, async (input) => {
+        // 构造恰好 5 个账户的提供者；再次创建必被拒（需求 2.5、6.4）
+        const provider = new MockProvider({
+          seed: FIXED_SEED,
+          clock: () => FIXED_NOW,
+          accountCount: 5,
+        });
+        const result = await provider.createAccount(input);
+        expectStructuredError(result, "ACCOUNT_LIMIT");
+      }),
+      FC_PARAMS
+    );
+  });
+
+  it("Feature: energy-storage-management, Property 16 — deleteAccount(仅剩 1 个账户) 返回 LAST_ACCOUNT 且无数据", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.constant(null), async () => {
+        // 构造仅 1 个账户的提供者；删除唯一账户必被拒（需求 2.12）
+        const provider = new MockProvider({
+          seed: FIXED_SEED,
+          clock: () => FIXED_NOW,
+          accountCount: 1,
+        });
+        const result = await provider.deleteAccount(ACCOUNT_ID);
+        expectStructuredError(result, "LAST_ACCOUNT");
       }),
       FC_PARAMS
     );
@@ -239,7 +283,7 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
   describe("代表性示例", () => {
     it("getDevice 对明确不存在的 id 返回 NOT_FOUND 且不含 data", async () => {
       const provider = freshProvider();
-      const result = await provider.getDevice("device-999999");
+      const result = await provider.getDevice(ACCOUNT_ID, "device-999999");
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.type).toBe("NOT_FOUND");
@@ -248,7 +292,7 @@ describe("Property 16: 失败返回结构化错误且无部分数据", () => {
 
     it("createStrategy 对空名称返回 VALIDATION 且指明 field 且不含 data", async () => {
       const provider = freshProvider();
-      const result = await provider.createStrategy({
+      const result = await provider.createStrategy(ACCOUNT_ID, {
         name: "",
         action: "charge",
         condition: { comparator: "greater_than", priceThreshold: 1 },

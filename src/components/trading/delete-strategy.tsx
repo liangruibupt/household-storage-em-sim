@@ -17,6 +17,11 @@ export interface DeleteStrategyProps {
   onDeleted?: () => void;
   /** 删除失败后的回调，携带中文错误提示 */
   onError?: (message: string) => void;
+  /**
+   * 账户作用域标识（Current_Account）。DELETE 请求据此附加 ?accountId=...，
+   * 仅可删除该账户名下策略（需求 6.5）。
+   */
+  accountId?: string;
 }
 
 /**
@@ -31,6 +36,7 @@ export default function DeleteStrategy({
   strategy,
   onDeleted,
   onError,
+  accountId,
 }: DeleteStrategyProps): JSX.Element {
   // 请求进行中标记，用于禁用按钮防止重复点击
   const [submitting, setSubmitting] = useState(false);
@@ -40,7 +46,10 @@ export default function DeleteStrategy({
     setSubmitting(true);
     const result = await sendJson<{ id: string }>(
       `/api/trading/strategies/${encodeURIComponent(strategy.id)}`,
-      "DELETE"
+      "DELETE",
+      // 删除无请求体；携带 accountId 限定作用域（需求 6.5）
+      undefined,
+      { accountId }
     );
     setSubmitting(false);
 

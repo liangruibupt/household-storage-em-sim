@@ -27,6 +27,19 @@ vi.mock("@/lib/http/client", () => ({
   sendJson: vi.fn(),
 }));
 
+// TradingPage 消费 AccountContext 读取 currentAccountId。mock useAccount 返回固定
+// Current_Account，使页面在无 Provider 的单元测试中确定性发起 account-001 作用域请求。
+vi.mock("@/components/account/account-context", () => ({
+  useAccount: () => ({
+    accounts: [],
+    currentAccountId: "account-001",
+    loading: false,
+    error: null,
+    setCurrentAccount: vi.fn(),
+    refreshAccounts: vi.fn(),
+  }),
+}));
+
 import { getJson, sendJson } from "@/lib/http/client";
 import StrategyList from "@/components/trading/strategy-list";
 import StrategyForm from "@/components/trading/strategy-form";
@@ -51,6 +64,7 @@ function makeStrategy(
 ): TradingStrategy {
   return {
     id: "s1",
+    accountId: "account-001",
     name: "夜间低价充电",
     action: "charge",
     condition: { comparator: "less_than", priceThreshold: 0.3 },
@@ -139,7 +153,9 @@ describe("StrategyForm 创建策略（需求 4.3）", () => {
           action: "charge",
           condition: { comparator: "greater_than", priceThreshold: 0.5 },
           enabled: true,
-        })
+        }),
+        // 第 4 个参数为账户作用域选项（独立渲染时 accountId 为 undefined）
+        { accountId: undefined }
       );
     });
 
@@ -196,7 +212,8 @@ describe("StrategyToggle 启停切换（需求 4.6）", () => {
       expect(mockSendJson).toHaveBeenCalledWith(
         "/api/trading/strategies/s1",
         "PUT",
-        { enabled: false }
+        { enabled: false },
+        { accountId: undefined }
       );
     });
     expect(onToggled).toHaveBeenCalledTimes(1);
@@ -215,7 +232,8 @@ describe("StrategyToggle 启停切换（需求 4.6）", () => {
       expect(mockSendJson).toHaveBeenCalledWith(
         "/api/trading/strategies/s2",
         "PUT",
-        { enabled: true }
+        { enabled: true },
+        { accountId: undefined }
       );
     });
   });
@@ -257,7 +275,10 @@ describe("DeleteStrategy 删除策略（需求 4.7）", () => {
     await waitFor(() => {
       expect(mockSendJson).toHaveBeenCalledWith(
         "/api/trading/strategies/s1",
-        "DELETE"
+        "DELETE",
+        // 删除无请求体；第 4 个参数为账户作用域选项
+        undefined,
+        { accountId: undefined }
       );
     });
     expect(onDeleted).toHaveBeenCalledTimes(1);
@@ -361,9 +382,13 @@ describe("TradingPage 电力交易页面（需求 4.1、4.11）", () => {
     // 当前电价展示（需求 4.11）
     expect(await screen.findByText("0.42 元/kWh")).toBeInTheDocument();
 
-    // 两个数据端点均被请求
-    expect(mockGetJson).toHaveBeenCalledWith("/api/trading/strategies");
-    expect(mockGetJson).toHaveBeenCalledWith("/api/trading/market");
+    // 两个数据端点均被请求（携带 Current_Account 作用域）
+    expect(mockGetJson).toHaveBeenCalledWith("/api/trading/strategies", {
+      accountId: "account-001",
+    });
+    expect(mockGetJson).toHaveBeenCalledWith("/api/trading/market", {
+      accountId: "account-001",
+    });
   });
 
   it("无策略时页面展示「暂无策略」空状态", async () => {

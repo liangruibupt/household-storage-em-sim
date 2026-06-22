@@ -23,6 +23,20 @@ vi.mock("next/navigation", () => ({
   usePathname: () => mockPathname,
 }));
 
+// NavBar 渲染常驻账户切换器 AccountSwitcher（消费 AccountContext）。
+// 为使该客户端组件在无 Provider 的单元测试中可确定性渲染，mock useAccount，
+// 返回「无账户」的稳定状态（切换器仅渲染占位，不影响导航相关断言）。
+vi.mock("@/components/account/account-context", () => ({
+  useAccount: () => ({
+    accounts: [],
+    currentAccountId: null,
+    loading: false,
+    error: null,
+    setCurrentAccount: vi.fn(),
+    refreshAccounts: vi.fn(),
+  }),
+}));
+
 // 在 mock 声明之后导入被测组件，确保组件使用的是被 mock 的 usePathname。
 import NavBar, { NAV_ITEMS } from "../../components/nav-bar";
 

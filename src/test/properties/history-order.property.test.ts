@@ -34,6 +34,9 @@ const MAX_HISTORY = 50;
 const CLOCK_BASE = Date.parse("2024-06-15T00:00:00.000Z");
 const CLOCK_STEP = 1000;
 
+// 账户作用域入参：seed-data 默认账户以 account-001 起始编号。
+const ACCOUNT_ID = "account-001";
+
 /**
  * 构造一个使用「单调递增时钟」的全新 MockProvider。
  * 时钟每被调用一次（构造期一次、每次 getMarketState 一次）即推进 CLOCK_STEP，
@@ -110,14 +113,14 @@ describe("Property 14: 触发历史倒序且截断 (MockProvider.getMarketState)
             condition: conditions[i],
             enabled: true,
           };
-          const created = await provider.createStrategy(input);
+          const created = await provider.createStrategy(ACCOUNT_ID, input);
           expect(created.ok).toBe(true);
         }
 
         // 多次调用 getMarketState：每次推进电价并运行触发引擎
         let lastHistory: StrategyActionRecord[] = [];
         for (let c = 0; c < calls; c++) {
-          const state = await provider.getMarketState();
+          const state = await provider.getMarketState(ACCOUNT_ID);
           expect(state.ok).toBe(true);
           if (!state.ok) return;
           lastHistory = state.data.history;
@@ -144,7 +147,7 @@ describe("Property 14: 触发历史倒序且截断 (MockProvider.getMarketState)
 
       // 创建 60 条启用且必定触发的策略（数量 > 50）
       for (let i = 0; i < 60; i++) {
-        const created = await provider.createStrategy({
+        const created = await provider.createStrategy(ACCOUNT_ID, {
           name: `bulk-${i + 1}`,
           action: "discharge",
           condition: { comparator: "greater_or_equal", priceThreshold: 0 },
@@ -154,7 +157,7 @@ describe("Property 14: 触发历史倒序且截断 (MockProvider.getMarketState)
       }
 
       // 单次调用即可让 60 条策略全部触发一次 → 应被截断至 50 条
-      const state = await provider.getMarketState();
+      const state = await provider.getMarketState(ACCOUNT_ID);
       expect(state.ok).toBe(true);
       if (!state.ok) return;
 
@@ -167,7 +170,7 @@ describe("Property 14: 触发历史倒序且截断 (MockProvider.getMarketState)
       const provider = freshProviderWithAdvancingClock(11);
 
       // 单条必触发策略；每次调用后重置去抖状态以便下一次再触发
-      const created = await provider.createStrategy({
+      const created = await provider.createStrategy(ACCOUNT_ID, {
         name: "repeater",
         action: "buy",
         condition: { comparator: "greater_or_equal", priceThreshold: 0 },
@@ -179,17 +182,17 @@ describe("Property 14: 触发历史倒序且截断 (MockProvider.getMarketState)
 
       const ROUNDS = 5;
       for (let r = 0; r < ROUNDS; r++) {
-        const state = await provider.getMarketState();
+        const state = await provider.getMarketState(ACCOUNT_ID);
         expect(state.ok).toBe(true);
         // 通过更新触发条件重置去抖状态（condition 变更会令 triggered=false），
         // 使下一次调用能在「更晚的时间戳」上再次触发。
-        const updated = await provider.updateStrategy(id, {
+        const updated = await provider.updateStrategy(ACCOUNT_ID, id, {
           condition: { comparator: "greater_or_equal", priceThreshold: 0 },
         });
         expect(updated.ok).toBe(true);
       }
 
-      const finalState = await provider.getMarketState();
+      const finalState = await provider.getMarketState(ACCOUNT_ID);
       expect(finalState.ok).toBe(true);
       if (!finalState.ok) return;
 

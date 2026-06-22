@@ -1,8 +1,10 @@
 "use client";
 
-// 充放电数据可视化页面 EnergyPage（需求 3.1、3.2、3.4、3.6）
+// 充放电数据可视化页面 EnergyPage（需求 3.1、3.2、3.4、3.6、6.5、6.6）
 //
 // 设计要点（设计文档「各功能区组件设计 / 4. 充放电数据可视化」）：
+//   - 从 AccountContext 读取 currentAccountId，所有请求携带 accountId，
+//     仅汇总 Current_Account 名下设备数据（需求 6.5）；切换账户后 3 秒内重新拉取（需求 6.6）。
 //   - 并行请求 GET /api/energy/summary 与 GET /api/energy/weekly（需求 3.1、3.2）。
 //   - 同时请求 GET /api/devices 获取设备列表，用于设备范围切换器与判定设备数（需求 3.4）。
 //   - TodaySummaryCards：展示当日总充/放电量（kWh，2 位小数，需求 3.1）。
@@ -23,6 +25,7 @@ import type {
   DataError,
   Device,
 } from "@/lib/data-access/types";
+import { useAccount } from "@/components/account/account-context";
 import LoadingState from "@/components/loading-state";
 import ErrorState from "@/components/error-state";
 import TodaySummaryCards from "@/components/energy/today-summary-cards";
@@ -49,6 +52,9 @@ function buildScopeQuery(deviceId: string | null): string {
  *   JSX.Element: 含设备范围切换、当日总量卡片与 7 天柱状图的页面。
  */
 export default function EnergyPage(): JSX.Element {
+  // 从账户上下文读取 Current_Account 标识；为 null 表示尚无账户（需求 6.5、6.6）
+  const { currentAccountId } = useAccount();
+
   // 「上一次成功数据」：失败时保留不清空（需求 3.6）
   const [summary, setSummary] = useState<DailySummary | null>(null);
   const [weekly, setWeekly] = useState<ChargeDischargeRecord[] | null>(null);
@@ -65,16 +71,27 @@ export default function EnergyPage(): JSX.Element {
   const energySeqRef = useRef<number>(0);
 
   // 拉取设备列表（用于范围切换器；失败不阻断充放电主内容，仅不展示切换器）
+  // 携带 accountId 限定为 Current_Account 名下设备（需求 6.5）
   const loadDevices = useCallback(async (): Promise<void> => {
-    const result = await getJson<Device[]>("/api/devices");
+    // 无 Current_Account：不发起请求（需求 6.5）
+    if (currentAccountId === null) {
+      return;
+    }
+    const result = await getJson<Device[]>("/api/devices", {
+      accountId: currentAccountId,
+    });
     if (result.ok) {
       setDevices(result.data ?? []);
     }
-  }, []);
+  }, [currentAccountId]);
 
-  // 并行拉取当日总量与 7 天数据（携带可选 deviceId）
+  // 并行拉取当日总量与 7 天数据（携带可选 deviceId 与 Current_Account 的 accountId）
   const loadEnergy = useCallback(
     async (deviceId: string | null): Promise<void> => {
+      // 无 Current_Account：不发起请求（需求 6.5）
+      if (currentAccountId === null) {
+        return;
+      }
       const seq = ++energySeqRef.current;
       // 进入加载态并清空上一次错误；既有数据保留，便于失败/切换时继续展示
       setLoading(true);
@@ -82,9 +99,14 @@ export default function EnergyPage(): JSX.Element {
 
       const query = buildScopeQuery(deviceId);
       // 并行发起两个请求（需求 3.1、3.2）；底层客户端各自强制 10s 超时（需求 3.6）
+      // 均携带 accountId，仅汇总该账户名下设备数据（需求 6.5）
       const [summaryResult, weeklyResult] = await Promise.all([
-        getJson<DailySummary>(`/api/energy/summary${query}`),
-        getJson<ChargeDischargeRecord[]>(`/api/energy/weekly${query}`),
+        getJson<DailySummary>(`/api/energy/summary${query}`, {
+          accountId: currentAccountId,
+        }),
+        getJson<ChargeDischargeRecord[]>(`/api/energy/weekly${query}`, {
+          accountId: currentAccountId,
+        }),
       ]);
 
       // 若已有更新的请求发起，丢弃本次陈旧结果（范围快速切换时的竞态保护）
@@ -109,14 +131,24 @@ export default function EnergyPage(): JSX.Element {
       setWeekly(weeklyResult.data);
       setLoading(false);
     },
-    []
+    [currentAccountId]
   );
 
-  // 首次挂载：并行加载设备列表与（全部汇总范围的）充放电数据
+  // 首次挂载及 Current_Account 变化时：并行加载设备列表与（全部汇总范围的）充放电数据
+  // 切换账户后各区在 3 秒内重新拉取并更新（需求 6.6）
   useEffect(() => {
     void loadDevices();
     void loadEnergy(null);
   }, [loadDevices, loadEnergy]);
+
+  // 切换账户时重置范围与既有数据，避免短暂展示其他账户数据（需求 6.5）
+  useEffect(() => {
+    setSelectedDeviceId(null);
+    setSummary(null);
+    setWeekly(null);
+    setDevices(null);
+    setError(null);
+  }, [currentAccountId]);
 
   // 范围切换：更新选中范围并携带 deviceId 重新请求（需求 3.4）
   const handleScopeChange = useCallback(
@@ -143,6 +175,20 @@ export default function EnergyPage(): JSX.Element {
       <WeeklyChart records={weekly} />
     </>
   );
+
+  // 尚无 Current_Account：渲染中性空态，不发起请求、不报错（需求 6.5）
+  if (currentAccountId === null) {
+    return (
+      <section className="energy-page">
+        <header className="energy-page__header">
+          <h1 className="energy-page__title">充放电数据</h1>
+        </header>
+        <p className="energy-page__empty" role="status">
+          请先选择账户
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="energy-page">

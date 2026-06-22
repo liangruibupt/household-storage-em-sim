@@ -11,6 +11,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import AccountSwitcher from "@/components/nav/account-switcher";
 
 // 单个导航入口的定义
 interface NavItem {
@@ -83,6 +84,8 @@ export default function NavBar(): JSX.Element {
           );
         })}
       </ul>
+      {/* 常驻账户切换器：展示账户列表（≤5）并标记 Current_Account（需求 6.4、6.6） */}
+      <AccountSwitcher />
     </nav>
   );
 }

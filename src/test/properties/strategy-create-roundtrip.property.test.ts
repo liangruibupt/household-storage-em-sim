@@ -19,6 +19,9 @@ import { validTradingStrategyInput } from "@/test/arbitraries/strategy";
 // 固定时钟基准（epoch 毫秒）：保证种子数据与读取派生完全确定。
 const FIXED_NOW = Date.parse("2024-06-15T12:00:00.000Z");
 
+// 账户作用域入参：seed-data 默认账户以 account-001 起始编号。
+const ACCOUNT_ID = "account-001";
+
 /** 构造一个使用固定时钟的全新 MockProvider，确保每个用例彼此隔离。 */
 function freshProvider(seed: number): MockProvider {
   return new MockProvider({ seed, clock: () => FIXED_NOW });
@@ -34,7 +37,7 @@ describe("Property 9: 策略创建往返一致 (MockProvider.createStrategy)", (
           // 每个用例使用全新 provider，避免状态在用例间泄漏
           const provider = freshProvider(seed);
 
-          const createResult = await provider.createStrategy(input);
+          const createResult = await provider.createStrategy(ACCOUNT_ID, input);
 
           // 合法输入必须创建成功（需求 4.3）
           expect(createResult.ok).toBe(true);
@@ -46,6 +49,9 @@ describe("Property 9: 策略创建往返一致 (MockProvider.createStrategy)", (
           expect(typeof created.id).toBe("string");
           expect(created.id.length).toBeGreaterThan(0);
 
+          // 新建策略归属当前账户（需求 4.3、6.4 / Property 9）
+          expect(created.accountId).toBe(ACCOUNT_ID);
+
           // 新建策略去抖状态为 false（需求 4.10：初始未触发）
           expect(created.triggered).toBe(false);
 
@@ -56,8 +62,8 @@ describe("Property 9: 策略创建往返一致 (MockProvider.createStrategy)", (
           expect(created.condition.priceThreshold).toBe(input.condition.priceThreshold);
           expect(created.enabled).toBe(input.enabled);
 
-          // 往返一致：该记录必须出现在 listStrategies() 中（需求 4.3）
-          const listResult = await provider.listStrategies();
+          // 往返一致：该记录必须出现在 listStrategies(accountId) 中（需求 4.3）
+          const listResult = await provider.listStrategies(ACCOUNT_ID);
           expect(listResult.ok).toBe(true);
           if (!listResult.ok) return;
 
@@ -65,7 +71,8 @@ describe("Property 9: 策略创建往返一致 (MockProvider.createStrategy)", (
           expect(found).toBeDefined();
           if (!found) return;
 
-          // 列表中的记录字段与 input 等价
+          // 列表中的记录字段与 input 等价，且归属当前账户
+          expect(found.accountId).toBe(ACCOUNT_ID);
           expect(found.name).toBe(input.name);
           expect(found.action).toBe(input.action);
           expect(found.condition.comparator).toBe(input.condition.comparator);
@@ -90,12 +97,12 @@ describe("Property 9: 策略创建往返一致 (MockProvider.createStrategy)", (
         condition: { comparator: "greater_than" as const, priceThreshold: 0 },
         enabled: true,
       };
-      const created = await provider.createStrategy(input);
+      const created = await provider.createStrategy(ACCOUNT_ID, input);
       expect(created.ok).toBe(true);
       if (!created.ok) return;
       expect(created.data.triggered).toBe(false);
 
-      const list = await provider.listStrategies();
+      const list = await provider.listStrategies(ACCOUNT_ID);
       expect(list.ok).toBe(true);
       if (!list.ok) return;
       const found = list.data.find((s) => s.id === created.data.id);
@@ -115,11 +122,11 @@ describe("Property 9: 策略创建往返一致 (MockProvider.createStrategy)", (
         condition: { comparator: "less_or_equal" as const, priceThreshold: 999999.99 },
         enabled: false,
       };
-      const created = await provider.createStrategy(input);
+      const created = await provider.createStrategy(ACCOUNT_ID, input);
       expect(created.ok).toBe(true);
       if (!created.ok) return;
 
-      const list = await provider.listStrategies();
+      const list = await provider.listStrategies(ACCOUNT_ID);
       expect(list.ok).toBe(true);
       if (!list.ok) return;
       const found = list.data.find((s) => s.id === created.data.id);

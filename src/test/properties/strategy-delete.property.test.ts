@@ -19,6 +19,9 @@ import { validTradingStrategyInput } from "@/test/arbitraries/strategy";
 // 固定时钟基准（epoch 毫秒）：保证种子数据与读取派生完全确定。
 const FIXED_NOW = Date.parse("2024-06-15T12:00:00.000Z");
 
+// 账户作用域入参：seed-data 默认账户以 account-001 起始编号。
+const ACCOUNT_ID = "account-001";
+
 /** 构造一个使用固定时钟的全新 MockProvider，确保每个用例彼此隔离。 */
 function freshProvider(seed: number): MockProvider {
   return new MockProvider({ seed, clock: () => FIXED_NOW });
@@ -39,12 +42,12 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
 
           // 先创建额外策略，扩充删除候选集合
           for (const input of inputs) {
-            const created = await provider.createStrategy(input);
+            const created = await provider.createStrategy(ACCOUNT_ID, input);
             expect(created.ok).toBe(true);
           }
 
           // 取删除前的完整策略列表
-          const beforeResult = await provider.listStrategies();
+          const beforeResult = await provider.listStrategies(ACCOUNT_ID);
           expect(beforeResult.ok).toBe(true);
           if (!beforeResult.ok) return;
           const before = beforeResult.data;
@@ -52,7 +55,7 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
           // 候选集合可能为空（种子策略数为 0 且未额外创建）：
           // 此时删除任意 id 均应返回 NOT_FOUND（在下方专门用例覆盖），此处直接通过。
           if (before.length === 0) {
-            const miss = await provider.deleteStrategy("strategy-nonexistent");
+            const miss = await provider.deleteStrategy(ACCOUNT_ID, "strategy-nonexistent");
             expect(miss.ok).toBe(false);
             if (miss.ok) return;
             expect(miss.error.type).toBe("NOT_FOUND");
@@ -63,13 +66,13 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
           const target = before[pickBase % before.length];
 
           // 删除成功并回显被删除的 id（需求 4.7）
-          const delResult = await provider.deleteStrategy(target.id);
+          const delResult = await provider.deleteStrategy(ACCOUNT_ID, target.id);
           expect(delResult.ok).toBe(true);
           if (!delResult.ok) return;
           expect(delResult.data.id).toBe(target.id);
 
           // 删除后：列表不再包含该 id，且总数恰好减少 1
-          const afterResult = await provider.listStrategies();
+          const afterResult = await provider.listStrategies(ACCOUNT_ID);
           expect(afterResult.ok).toBe(true);
           if (!afterResult.ok) return;
           const after = afterResult.data;
@@ -86,7 +89,7 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
           expect(actualRemaining).toEqual(expectedRemaining);
 
           // 重复删除同一 id：现已不存在，返回 NOT_FOUND（需求 4.7）
-          const repeat = await provider.deleteStrategy(target.id);
+          const repeat = await provider.deleteStrategy(ACCOUNT_ID, target.id);
           expect(repeat.ok).toBe(false);
           if (repeat.ok) return;
           expect(repeat.error.type).toBe("NOT_FOUND");
@@ -106,7 +109,7 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
           const provider = freshProvider(seed);
 
           // 取当前已存在的 id 集合，确保我们构造的 id 确实不存在
-          const listResult = await provider.listStrategies();
+          const listResult = await provider.listStrategies(ACCOUNT_ID);
           expect(listResult.ok).toBe(true);
           if (!listResult.ok) return;
           const existingIds = new Set(listResult.data.map((s) => s.id));
@@ -117,13 +120,13 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
             missingId = `missing-${missingId}`;
           }
 
-          const result = await provider.deleteStrategy(missingId);
+          const result = await provider.deleteStrategy(ACCOUNT_ID, missingId);
           expect(result.ok).toBe(false);
           if (result.ok) return;
           expect(result.error.type).toBe("NOT_FOUND");
 
           // 删除失败不得改动内存：策略列表保持不变
-          const afterResult = await provider.listStrategies();
+          const afterResult = await provider.listStrategies(ACCOUNT_ID);
           expect(afterResult.ok).toBe(true);
           if (!afterResult.ok) return;
           expect(afterResult.data.map((s) => s.id).sort()).toEqual(
@@ -141,7 +144,7 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
   describe("代表性示例", () => {
     it("创建一条策略后删除，列表不再包含且重复删除返回 NOT_FOUND", async () => {
       const provider = freshProvider(7);
-      const created = await provider.createStrategy({
+      const created = await provider.createStrategy(ACCOUNT_ID, {
         name: "to-delete",
         action: "discharge",
         condition: { comparator: "less_than", priceThreshold: 1.5 },
@@ -151,17 +154,17 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
       if (!created.ok) return;
       const id = created.data.id;
 
-      const del = await provider.deleteStrategy(id);
+      const del = await provider.deleteStrategy(ACCOUNT_ID, id);
       expect(del.ok).toBe(true);
       if (!del.ok) return;
       expect(del.data.id).toBe(id);
 
-      const list = await provider.listStrategies();
+      const list = await provider.listStrategies(ACCOUNT_ID);
       expect(list.ok).toBe(true);
       if (!list.ok) return;
       expect(list.data.some((s) => s.id === id)).toBe(false);
 
-      const again = await provider.deleteStrategy(id);
+      const again = await provider.deleteStrategy(ACCOUNT_ID, id);
       expect(again.ok).toBe(false);
       if (again.ok) return;
       expect(again.error.type).toBe("NOT_FOUND");
@@ -169,7 +172,7 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
 
     it("删除从未存在的 id 返回 NOT_FOUND", async () => {
       const provider = freshProvider(8);
-      const result = await provider.deleteStrategy("definitely-not-here");
+      const result = await provider.deleteStrategy(ACCOUNT_ID, "definitely-not-here");
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.type).toBe("NOT_FOUND");
@@ -181,12 +184,12 @@ describe("Property 12: 策略删除后不可见 (MockProvider.deleteStrategy)", 
         clock: () => FIXED_NOW,
         strategyCount: 0,
       });
-      const list = await provider.listStrategies();
+      const list = await provider.listStrategies(ACCOUNT_ID);
       expect(list.ok).toBe(true);
       if (!list.ok) return;
       expect(list.data.length).toBe(0);
 
-      const result = await provider.deleteStrategy("strategy-001");
+      const result = await provider.deleteStrategy(ACCOUNT_ID, "strategy-001");
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.type).toBe("NOT_FOUND");

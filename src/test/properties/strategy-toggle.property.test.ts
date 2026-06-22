@@ -20,6 +20,9 @@ import { validTradingStrategyInput } from "@/test/arbitraries/strategy";
 // 固定时钟基准（epoch 毫秒）：保证种子数据与读取派生完全确定。
 const FIXED_NOW = Date.parse("2024-06-15T12:00:00.000Z");
 
+// 账户作用域入参：seed-data 默认账户以 account-001 起始编号。
+const ACCOUNT_ID = "account-001";
+
 /** 构造一个使用固定时钟的全新 MockProvider，确保每个用例彼此隔离。 */
 function freshProvider(seed: number): MockProvider {
   return new MockProvider({ seed, clock: () => FIXED_NOW });
@@ -30,7 +33,7 @@ async function readEnabled(
   provider: MockProvider,
   id: string
 ): Promise<boolean | undefined> {
-  const list = await provider.listStrategies();
+  const list = await provider.listStrategies(ACCOUNT_ID);
   if (!list.ok) return undefined;
   return list.data.find((s) => s.id === id)?.enabled;
 }
@@ -47,13 +50,13 @@ describe("Property 11: 策略启用状态更新往返一致 (MockProvider.update
           const provider = freshProvider(seed);
 
           // 创建目标策略
-          const created = await provider.createStrategy(input);
+          const created = await provider.createStrategy(ACCOUNT_ID, input);
           expect(created.ok).toBe(true);
           if (!created.ok) return;
           const id = created.data.id;
 
           // 仅更新 enabled 字段（需求 4.6）
-          const updated = await provider.updateStrategy(id, {
+          const updated = await provider.updateStrategy(ACCOUNT_ID, id, {
             enabled: targetEnabled,
           });
 
@@ -92,14 +95,14 @@ describe("Property 11: 策略启用状态更新往返一致 (MockProvider.update
         async (input, toggles, seed) => {
           const provider = freshProvider(seed);
 
-          const created = await provider.createStrategy(input);
+          const created = await provider.createStrategy(ACCOUNT_ID, input);
           expect(created.ok).toBe(true);
           if (!created.ok) return;
           const id = created.data.id;
 
           // 逐次应用切换，每一步都校验返回值与列表均反映当前设置值
           for (const next of toggles) {
-            const res = await provider.updateStrategy(id, { enabled: next });
+            const res = await provider.updateStrategy(ACCOUNT_ID, id, { enabled: next });
             expect(res.ok).toBe(true);
             if (!res.ok) return;
             expect(res.data.enabled).toBe(next);
@@ -127,14 +130,14 @@ describe("Property 11: 策略启用状态更新往返一致 (MockProvider.update
           const provider = freshProvider(seed);
 
           // 使用默认种子策略（DEFAULT_STRATEGY_COUNT=4，列表非空）
-          const list = await provider.listStrategies();
+          const list = await provider.listStrategies(ACCOUNT_ID);
           expect(list.ok).toBe(true);
           if (!list.ok) return;
           expect(list.data.length).toBeGreaterThan(0);
 
           const target = list.data[0];
 
-          const updated = await provider.updateStrategy(target.id, {
+          const updated = await provider.updateStrategy(ACCOUNT_ID, target.id, {
             enabled: targetEnabled,
           });
           expect(updated.ok).toBe(true);
@@ -155,7 +158,7 @@ describe("Property 11: 策略启用状态更新往返一致 (MockProvider.update
   describe("代表性示例", () => {
     it("enable→disable→enable 轨迹的每一步均持久化", async () => {
       const provider = freshProvider(7);
-      const created = await provider.createStrategy({
+      const created = await provider.createStrategy(ACCOUNT_ID, {
         name: "toggle-demo",
         action: "charge",
         condition: { comparator: "greater_than", priceThreshold: 1.5 },
@@ -166,7 +169,7 @@ describe("Property 11: 策略启用状态更新往返一致 (MockProvider.update
       const id = created.data.id;
 
       for (const next of [true, false, true]) {
-        const res = await provider.updateStrategy(id, { enabled: next });
+        const res = await provider.updateStrategy(ACCOUNT_ID, id, { enabled: next });
         expect(res.ok).toBe(true);
         if (!res.ok) return;
         expect(res.data.enabled).toBe(next);
