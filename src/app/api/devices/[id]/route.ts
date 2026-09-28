@@ -13,9 +13,9 @@ import {
   providerErrorResponse,
 } from "@/lib/http/api-response";
 
-/** 动态路由参数：设备唯一标识 */
+/** 动态路由参数：设备唯一标识（Next 15 起是 Promise） */
 interface RouteContext {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -41,7 +41,7 @@ export async function GET(
     // 设备不存在或不属于该账户时，数据访问层返回 NOT_FOUND，经映射为 404
     const result = await provider.getDevice(
       accountId.value,
-      context.params.id
+      (await context.params).id
     );
     return resultToResponse(result);
   } catch {

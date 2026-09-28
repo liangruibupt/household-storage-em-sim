@@ -285,7 +285,7 @@ describe("单个账户 API 路由 (/api/accounts/[id])", () => {
     const id = await firstAccountId(provider);
     const res = await accountGET(
       new Request(`http://localhost/api/accounts/${id}`),
-      { params: { id } }
+      { params: Promise.resolve({ id }) }
     );
     const body = await res.json();
     expect(res.status).toBe(200);
@@ -297,7 +297,7 @@ describe("单个账户 API 路由 (/api/accounts/[id])", () => {
     useRealProvider();
     const res = await accountGET(
       new Request("http://localhost/api/accounts/does-not-exist"),
-      { params: { id: "does-not-exist" } }
+      { params: Promise.resolve({ id: "does-not-exist" }) }
     );
     const body = await res.json();
     expect(res.status).toBe(404);
@@ -309,7 +309,7 @@ describe("单个账户 API 路由 (/api/accounts/[id])", () => {
     const id = await firstAccountId(provider);
     const res = await accountPUT(
       jsonRequest(`http://localhost/api/accounts/${id}`, "PUT", JSON.stringify(VALID_ACCOUNT)),
-      { params: { id } }
+      { params: Promise.resolve({ id }) }
     );
     const body = await res.json();
     expect(res.status).toBe(200);
@@ -325,7 +325,7 @@ describe("单个账户 API 路由 (/api/accounts/[id])", () => {
     const invalid: AccountProfileInput = { ...VALID_ACCOUNT, email: "not-an-email" };
     const res = await accountPUT(
       jsonRequest(`http://localhost/api/accounts/${id}`, "PUT", JSON.stringify(invalid)),
-      { params: { id } }
+      { params: Promise.resolve({ id }) }
     );
     const body = await res.json();
     expect(res.status).toBe(400);
@@ -337,7 +337,7 @@ describe("单个账户 API 路由 (/api/accounts/[id])", () => {
     const id = await firstAccountId(provider);
     const res = await accountDELETE(
       new Request(`http://localhost/api/accounts/${id}`, { method: "DELETE" }),
-      { params: { id } }
+      { params: Promise.resolve({ id }) }
     );
     const body = await res.json();
     expect(res.status).toBe(200);
@@ -354,7 +354,7 @@ describe("单个账户 API 路由 (/api/accounts/[id])", () => {
     const id = await firstAccountId(provider);
     const res = await accountDELETE(
       new Request(`http://localhost/api/accounts/${id}`, { method: "DELETE" }),
-      { params: { id } }
+      { params: Promise.resolve({ id }) }
     );
     const body = await res.json();
     expect(res.status).toBe(409);
@@ -367,7 +367,7 @@ describe("单个账户 API 路由 (/api/accounts/[id])", () => {
     });
     const res = await accountPUT(
       jsonRequest("http://localhost/api/accounts/account-001", "PUT", JSON.stringify(VALID_ACCOUNT)),
-      { params: { id: "account-001" } }
+      { params: Promise.resolve({ id: "account-001" }) }
     );
     const body = await res.json();
     expect(res.status).toBe(500);
@@ -408,7 +408,7 @@ describe("设备 API 路由", () => {
 
     const res = await deviceDetailGET(
       new Request(`http://localhost/api/devices/${id}?accountId=${accountId}`),
-      { params: { id } }
+      { params: Promise.resolve({ id }) }
     );
     const body = await res.json();
     expect(res.status).toBe(200);
@@ -421,7 +421,7 @@ describe("设备 API 路由", () => {
     const accountId = await firstAccountId(provider);
     const res = await deviceDetailGET(
       new Request(`http://localhost/api/devices/does-not-exist?accountId=${accountId}`),
-      { params: { id: "does-not-exist" } }
+      { params: Promise.resolve({ id: "does-not-exist" }) }
     );
     const body = await res.json();
     expect(res.status).toBe(404);
@@ -608,7 +608,7 @@ describe("电力交易 API 路由", () => {
         "PUT",
         JSON.stringify({ enabled: true })
       ),
-      { params: { id } }
+      { params: Promise.resolve({ id }) }
     );
     const body = await res.json();
     expect(res.status).toBe(200);
@@ -625,7 +625,7 @@ describe("电力交易 API 路由", () => {
         "PUT",
         JSON.stringify({ enabled: true })
       ),
-      { params: { id: "ghost" } }
+      { params: Promise.resolve({ id: "ghost" }) }
     );
     const body = await res.json();
     expect(res.status).toBe(404);
@@ -644,7 +644,7 @@ describe("电力交易 API 路由", () => {
         `http://localhost/api/trading/strategies/${id}?accountId=${accountId}`,
         { method: "DELETE" }
       ),
-      { params: { id } }
+      { params: Promise.resolve({ id }) }
     );
     const body = await res.json();
     expect(res.status).toBe(200);
@@ -660,7 +660,7 @@ describe("电力交易 API 路由", () => {
         `http://localhost/api/trading/strategies/ghost?accountId=${accountId}`,
         { method: "DELETE" }
       ),
-      { params: { id: "ghost" } }
+      { params: Promise.resolve({ id: "ghost" }) }
     );
     const body = await res.json();
     expect(res.status).toBe(404);

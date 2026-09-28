@@ -20,9 +20,9 @@ import {
   providerErrorResponse,
 } from "@/lib/http/api-response";
 
-/** App Router 动态段参数类型：路径中的 [id] */
+/** App Router 动态段参数类型：路径中的 [id]（Next 15 起是 Promise） */
 interface RouteContext {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -42,7 +42,7 @@ export async function PUT(
       return errorResponse(accountId.error);
     }
 
-    const { id } = context.params;
+    const { id } = await context.params;
 
     // 解析请求体，畸形 JSON 直接按 400 校验失败返回
     const parsed = await parseJsonBody<TradingStrategyPatch>(request);
@@ -79,7 +79,7 @@ export async function DELETE(
       return errorResponse(accountId.error);
     }
 
-    const { id } = context.params;
+    const { id } = await context.params;
     const result = await getDataProvider().deleteStrategy(accountId.value, id);
     return resultToResponse(result);
   } catch {

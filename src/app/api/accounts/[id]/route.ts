@@ -21,9 +21,9 @@ import {
 } from "@/lib/http/api-response";
 import type { AccountProfileInput } from "@/lib/data-access/types";
 
-/** 动态路由参数：账户唯一标识 */
+/** 动态路由参数：账户唯一标识（Next 15 起是 Promise） */
 interface RouteContext {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -41,7 +41,7 @@ export async function GET(
     // 经工厂获取当前数据提供者（当前为 MockProvider，未来可零改动替换）
     const provider = getDataProvider();
     // 账户不存在时数据访问层返回 NOT_FOUND，经映射为 404
-    const result = await provider.getAccount(context.params.id);
+    const result = await provider.getAccount((await context.params).id);
     return resultToResponse(result);
   } catch {
     // 兜底：将意外异常转换为 PROVIDER_ERROR（500），绝不返回栈信息
@@ -74,7 +74,7 @@ export async function PUT(
     // 经工厂获取当前数据提供者并更新资料；字段级校验由数据访问层统一执行
     const provider = getDataProvider();
     const result = await provider.updateAccountProfile(
-      context.params.id,
+      (await context.params).id,
       parsed.value
     );
     return resultToResponse(result);
@@ -101,7 +101,7 @@ export async function DELETE(
   try {
     // 经工厂获取当前数据提供者并删除账户；唯一账户判定与级联删除由数据访问层执行
     const provider = getDataProvider();
-    const result = await provider.deleteAccount(context.params.id);
+    const result = await provider.deleteAccount((await context.params).id);
     // 成功时直接返回数据访问层提供的剩余账户标识列表（remainingAccountIds）
     return resultToResponse(result);
   } catch {
