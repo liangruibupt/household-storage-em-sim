@@ -20,13 +20,14 @@
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",
-    "@types/node": "^20.14.0",
+    "@types/node": "^22.20.4",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.1.1",
     "fast-check": "^3.23.2",
     "jsdom": "^25.0.1",
     "typescript": "^5.5.3",
-    "vitest": "^2.1.8"
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
   }
 }
